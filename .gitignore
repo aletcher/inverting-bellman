@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+
+# Virtual environment
+.venv/
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.code-workspace
+
+# Run logs/outputs
+outputs/
+wandb/
+*.log

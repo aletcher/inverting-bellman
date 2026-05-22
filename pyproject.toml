@@ -1,0 +1,19 @@
+[project]
+name = "inverting-bellman"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "jax==0.9.2",
+    "optax==0.2.8",
+    "flax==0.12.2",
+    "numpy==2.4.4",
+    "wandb==0.25.1",
+    "gymnax==0.0.9",
+    "chex==0.1.91",
+    "matplotlib==3.10.8",
+    "seaborn==0.13.2",
+    "pandas==3.0.1",
+]
+
+[project.optional-dependencies]
+cuda = ["jax[cuda12]"]
