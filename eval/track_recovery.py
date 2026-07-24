@@ -62,7 +62,7 @@ def track_recovery_for_run(
     env_terminated_fn=None, state_to_eff_fn=None, eff_to_obs_fn=None,
     wm_output_dim=None, wm_sample_fn=None,
     goal_indices=None, max_ckpts=None, n_visit_starts=512,
-    n_wm_eval=None, subdir="recovery_track",
+    n_wm_eval=None, subdir="recovery_track", visitation_from="self",
 ):
     """Track Q_NMSE + WM_NMSE (uniform & visitation-weighted) per checkpoint.
 
@@ -134,30 +134,36 @@ def track_recovery_for_run(
         goal_rd[gi] = (goal_j, mask_j, rew, dn)
         goal_qstar[gi] = jax.block_until_ready(q_star)
 
-    # ── Visitation weights from the REFERENCE (final tracked) checkpoint ──
-    # This is the distribution the (converged) agent was trained on. Roll out its
-    # greedy policy on true dynamics from env.reset() starts.
-    ref_q, ref_bs, _ = _load(ckpt_files[-1])
+    # ── Visitation distribution. `visitation_from`:
+    #   "self"  → each checkpoint weighted by ITS OWN greedy-policy visitation
+    #             (the on-support region grows as the agent trains);
+    #   "final" → all checkpoints weighted by the converged agent's visitation.
+    # Roll out the greedy policy on true dynamics from env.reset() starts (the
+    # starts are policy-independent, computed once). ──
     reset_keys = jax.random.split(jax.random.PRNGKey(0), n_visit_starts)
     start_obs = jax.block_until_ready(jax.vmap(
         lambda k: basic_env.reset(k, env_params)[0])(reset_keys))
     start_states = obs_to_grid_fn(start_obs) if obs_to_grid_fn is not None else start_obs
-    w = grid_visitation(
-        ref_q, ref_bs, pqn_config, vi_dynamics_fn,
-        jnp.asarray(goals)[jnp.asarray(goal_indices)],
-        jnp.asarray(goal_masks)[jnp.asarray(goal_indices)],
-        start_states, state_dim, action_dim, state_ranges, vi_grid_res,
-        max_steps=pqn_config["MAX_STEPS_IN_EPISODE"], a_threshold=a_thr,
-        terminate_on_goal=terminate, state_to_obs_fn=state_to_obs_fn,
-        obs_state_dim=obs_state_dim, env_terminated_fn=env_terminated_fn)
-    w = jax.block_until_ready(w)
-    print(f"  visitation: {float((w > 0).mean()) * 100:.1f}% of grid cells occupied",
-          flush=True)
+    goals_j = jnp.asarray(goals)[jnp.asarray(goal_indices)]
+    masks_j = jnp.asarray(goal_masks)[jnp.asarray(goal_indices)]
 
-    # ── WM eval state set (fixed across checkpoints) + per-state visitation
-    # weights. Both WM_NMSE (uniform, weighted) use the SAME eval set and the
-    # same fixed scale; only the MSE numerator is re-weighted for the visitation
-    # version (dynamics_nmse holds the variance denominator uniform). ──
+    def _visit(qp, qbs):
+        w = grid_visitation(
+            qp, qbs, pqn_config, vi_dynamics_fn, goals_j, masks_j,
+            start_states, state_dim, action_dim, state_ranges, vi_grid_res,
+            max_steps=pqn_config["MAX_STEPS_IN_EPISODE"], a_threshold=a_thr,
+            terminate_on_goal=terminate, state_to_obs_fn=state_to_obs_fn,
+            obs_state_dim=obs_state_dim, env_terminated_fn=env_terminated_fn)
+        return jax.block_until_ready(w)
+
+    w_fixed = None
+    if visitation_from == "final":
+        rq, rbs, _ = _load(ckpt_files[-1])
+        w_fixed = _visit(rq, rbs)
+
+    # ── WM eval state set (fixed across checkpoints). WM_NMSE uniform vs
+    # visitation share this set and a fixed scale; only the MSE numerator is
+    # re-weighted (dynamics_nmse holds the variance denominator uniform). ──
     rng = jax.random.PRNGKey(int(wm_config.get("SEED", 0)) + 12345)
     r_u, _ = jax.random.split(rng)
     if wm_sample_fn is not None:
@@ -167,12 +173,22 @@ def track_recovery_for_run(
             r_u, pqn_config["STATE_RANGES"], obs_state_dim, n_wm_eval)
     eval_states_grid = (obs_to_grid_fn(eval_states_uniform)
                         if obs_to_grid_fn is not None else eval_states_uniform)
-    eval_weights = _weights_at_states(eval_states_grid, w, state_ranges)
+
+    def _breadth(w):
+        occ = float((w > 0).mean())                       # fraction of cells visited
+        wf = w.reshape(-1)
+        ent = -float(jnp.sum(jnp.where(wf > 0, wf * jnp.log(wf), 0.0)))
+        return occ, ent
 
     rows = []
     for ci, path in enumerate(ckpt_files):
         t0 = time.time()
         q_params, q_bs, n_updates = _load(path)
+
+        # Per-checkpoint (or fixed) visitation weights.
+        w = w_fixed if w_fixed is not None else _visit(q_params, q_bs)
+        eval_weights = _weights_at_states(eval_states_grid, w, state_ranges)
+        visit_frac, visit_entropy = _breadth(w)
 
         # Q_NMSE averaged over goals (uniform + visitation-weighted + optimal).
         acc = {}
@@ -205,9 +221,11 @@ def track_recovery_for_run(
 
         row = {"n_updates": n_updates,
                "wm_nmse_uniform": float(wm_u), "wm_nmse_visit": float(wm_v),
+               "visit_frac": visit_frac, "visit_entropy": visit_entropy,
                **qrow}
         rows.append(row)
         print(f"  [{ci+1}/{len(ckpt_files)}] step={n_updates:6d}  "
+              f"visit={visit_frac*100:4.1f}%  "
               f"Q_NMSE u={qrow['q_nmse_policy_uniform']:.3e}/"
               f"v={qrow.get('q_nmse_policy_weighted', float('nan')):.3e}  "
               f"WM_NMSE u={wm_u:.3e}/v={wm_v:.3e}  ({time.time()-t0:.1f}s)",

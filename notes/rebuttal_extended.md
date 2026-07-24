@@ -89,12 +89,34 @@ Both Q-error and recovery-error are **smaller on the visited region** than
 uniformly — the empirical signature of A.5. (Absolute WM_NMSE is inflated by the
 50-step smoke WM; the full GPU run uses 20 000 steps.)
 
-### A.5 Expected full-run claims
+### A.5 Per-checkpoint vs final visitation (`--visitation_from`)
+Each checkpoint is weighted by **its own** greedy-policy visitation
+(`visitation_from="self"`, default) — i.e. `Reach(π)` for the *current* policy,
+which is the correct on-support region for that checkpoint's `Q`. (`"final"`
+reuses the converged agent's visitation for all checkpoints.) The tracker also
+records visitation **breadth** per checkpoint (`visit_frac` = fraction of grid
+cells occupied, `visit_entropy`), plotted on the WM panel of A2.
+
+**Hypothesis this exposes.** The reachable set *grows* as the agent trains, so:
+- **on-visitation** recovery error (`WM_NMSE_visit`) may be **low at all
+  checkpoints** — even early ones — because the WM recovers dynamics well
+  wherever the current policy actually goes and `Q` is accurate there;
+- **uniform/global** recovery error (`WM_NMSE_uniform`) falls **only as training
+  progresses**, because coverage broadens (`visit_frac` rises) and the model
+  becomes accurate over an increasing fraction of the box.
+
+This is the sharpest empirical statement of the reduced-MDP picture (Part B):
+recovery is essentially always good on `Reach(π)`; what improves over training is
+the *size* of `Reach(π)`, not the on-support recovery quality.
+
+### A.6 Expected full-run claims
 - **A1:** monotone recovery-vs-Q-error scaling; `WM_NMSE ≪ Q_NMSE`; Spearman
   `ρ(WM_NMSE, Q_NMSE)<0` significant.
-- **A2:** `WM_NMSE_visit < WM_NMSE_uniform`, and recovery error tracks
-  *visitation-weighted* Q-error more tightly than uniform Q-error — validating
-  that the reduced-MDP conditions (Part B) approximately hold in practice.
+- **A2:** `WM_NMSE_visit < WM_NMSE_uniform`; `WM_NMSE_visit` low and roughly flat
+  across checkpoints while `WM_NMSE_uniform` falls with rising `visit_frac`
+  (A.5); recovery error tracks *visitation-weighted* Q-error more tightly than
+  uniform Q-error — validating that the reduced-MDP conditions (Part B)
+  approximately hold in practice.
 
 ---
 

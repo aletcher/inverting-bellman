@@ -29,7 +29,7 @@ from eval.track_recovery import track_recovery_for_run
 from plotting.style import set_paper_style, unset_paper_style, COLOR_TRUE, COLOR_WM
 
 
-def _load_or_track(run_dir, ctx, max_ckpts, goal_indices, reuse):
+def _load_or_track(run_dir, ctx, max_ckpts, goal_indices, reuse, visitation_from):
     npz = os.path.join(run_dir, "recovery_track", "recovery_tracking.npz")
     if reuse and os.path.exists(npz):
         print(f"Reusing {npz}")
@@ -42,7 +42,8 @@ def _load_or_track(run_dir, ctx, max_ckpts, goal_indices, reuse):
         grid_state_dim=ctx["grid_state_dim"], grid_state_ranges=ctx["grid_state_ranges"],
         env_terminated_fn=ctx["env_terminated_fn"], state_to_eff_fn=ctx["state_to_eff_fn"],
         eff_to_obs_fn=ctx["eff_to_obs_fn"], wm_output_dim=ctx["wm_output_dim"],
-        wm_sample_fn=ctx["wm_sample_fn"], goal_indices=goal_indices, max_ckpts=max_ckpts)
+        wm_sample_fn=ctx["wm_sample_fn"], goal_indices=goal_indices, max_ckpts=max_ckpts,
+        visitation_from=visitation_from)
 
 
 def _spearman(x, y):
@@ -62,6 +63,7 @@ def main():
     ap.add_argument("--out_dir", default=None)
     ap.add_argument("--reuse", action="store_true")
     ap.add_argument("--wm_num_steps", type=int, default=None)
+    ap.add_argument("--visitation_from", choices=["self", "final"], default="self")
     args = ap.parse_args()
 
     goal_indices = ([int(x) for x in args.goals.split(",")] if args.goals else None)
@@ -72,7 +74,8 @@ def main():
     out_dir = args.out_dir or f"outputs/{env_stem}/dist_vs_uniform"
     os.makedirs(out_dir, exist_ok=True)
 
-    per_seed = [_load_or_track(rd, ctx, args.max_ckpts, goal_indices, args.reuse)
+    per_seed = [_load_or_track(rd, ctx, args.max_ckpts, goal_indices, args.reuse,
+                               args.visitation_from)
                 for rd in args.run_dirs]
 
     def cat(k):
@@ -101,6 +104,15 @@ def main():
     for ax, ttl in zip(axes, [r"$Q_{\mathrm{NMSE}}$", r"$\mathrm{WM}_{\mathrm{NMSE}}$"]):
         ax.set_yscale("log"); ax.set_xlabel("PQN update step"); ax.set_title(ttl)
     axes[0].set_ylabel("NMSE")
+    # Visitation breadth on the WM panel: the on-support region grows as the
+    # agent trains, so WM_visit can stay low while WM_uniform falls with coverage.
+    if all("visit_frac" in d for d in per_seed):
+        axb = axes[1].twinx(); axb.grid(False)
+        for d in per_seed:
+            axb.plot(d["n_updates"], 100.0 * d["visit_frac"], color="0.5",
+                     linestyle=":", marker="^", markersize=4)
+        axb.set_ylabel("visited cells (%)", color="0.4")
+        axb.tick_params(axis="y", labelcolor="0.4")
     # de-duplicate legend labels
     h, l = axes[0].get_legend_handles_labels()
     seen = dict(zip(l, h)); axes[0].legend(seen.values(), seen.keys(), fontsize=8)
