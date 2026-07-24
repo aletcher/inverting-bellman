@@ -70,6 +70,75 @@ def _slice_label(slice_point, state_labels, exclude_dims=()):
     return ", ".join(parts)
 
 
+def dynamics_nmse(p_params, wm_config, env_config, dynamics_fn, eval_states,
+                  action_dim, state_dim, weights=None,
+                  state_to_eff_fn=None, eff_to_obs_fn=None, wm_output_dim=None):
+    """Metric-only WM-vs-true dynamics NMSE on a caller-supplied state set.
+
+    The scoring core of compare_dynamics with NO disk writes and NO plots, so a
+    single trained WM can be scored on any state distribution (e.g. uniform vs
+    visitation-weighted). NMSE = MSE / Var(true next-state), averaged over
+    (action, state-dim), matching compare_dynamics exactly.
+
+    Args:
+        eval_states: (n, state_dim) states to score at (obs space).
+        weights: optional (n,) non-negative per-state weights. When given, MSE
+            and Var use the weighted mean/variance of the true next-state — this
+            is how the visitation-weighted (on-support) metric is computed.
+        state_to_eff_fn, eff_to_obs_fn, wm_output_dim: effective-state lift fns
+            (Reacher 4D WM), mirroring compare_dynamics.
+
+    Returns (avg_nmse, avg_mse, per_key_metrics) where per_key_metrics maps
+    f"{action}_{dim}" -> {"mse", "nmse"}.
+    """
+    from training.wm import _wrap_angle
+
+    state_labels = env_config["STATE_LABELS"]
+    action_names = env_config["ACTION_NAMES"]
+    angle_dims = wm_config.get("ANGLE_DIMS")
+    angle_dims_set = set(angle_dims) if angle_dims else set()
+    residual = wm_config.get("RESIDUAL_PREDICTION", True)
+    wm_input_dims = wm_config.get("WM_INPUT_DIMS")
+    out_dim = wm_output_dim if wm_output_dim is not None else state_dim
+    p_model = make_world_model(wm_config, out_dim)
+    effective_output = eff_to_obs_fn is not None
+    _wm_state_to_eff_fn = state_to_eff_fn if effective_output else None
+
+    n_eval = eval_states.shape[0]
+    if weights is not None:
+        w = jnp.asarray(weights, dtype=jnp.float32)
+        w = w / (jnp.sum(w) + 1e-12)          # normalise to sum 1
+
+    def _wmean(x):
+        # Visitation-weighted MSE numerator; variance denominator stays uniform
+        # (see _metrics in value_iteration.py for why the scale is held fixed).
+        return jnp.sum(w * x) if weights is not None else jnp.mean(x)
+
+    per_key = {}
+    for a in range(action_dim):
+        actions = jnp.full(n_eval, a)
+        s_true = dynamics_fn(eval_states, actions)
+        a_oh = jax.nn.one_hot(actions, action_dim)
+        s_pred = apply_wm(p_model, p_params, eval_states, a_oh, residual=residual,
+                          state_to_eff_fn=_wm_state_to_eff_fn,
+                          angle_dims=angle_dims, eff_to_obs_fn=eff_to_obs_fn,
+                          wm_input_dims=wm_input_dims)
+        for d in range(state_dim):
+            diff = s_pred[:, d] - s_true[:, d]
+            if d in angle_dims_set:
+                diff = _wrap_angle(diff)
+            abs_err = jnp.abs(diff)
+            mse_d = float(_wmean(abs_err ** 2))
+            var_d = float(jnp.var(s_true[:, d]))   # fixed uniform-scale denominator
+            nmse_d = (mse_d / var_d) if var_d > 1e-12 else 0.0
+            per_key[f"{action_names[a]}_{state_labels[d]}"] = {
+                "mse": mse_d, "nmse": nmse_d,
+            }
+    avg_mse = sum(m["mse"] for m in per_key.values()) / len(per_key)
+    avg_nmse = sum(m["nmse"] for m in per_key.values()) / len(per_key)
+    return avg_nmse, avg_mse, per_key
+
+
 def compare_dynamics(p_params, out_dir, wm_config, env_config, dynamics_fn,
                      goals=None, goal_masks=None, losses=None,
                      plots=True,
@@ -111,7 +180,6 @@ def compare_dynamics(p_params, out_dir, wm_config, env_config, dynamics_fn,
     n_heat = wm_config["EVAL_HEATMAP_RES"]
     residual = wm_config.get("RESIDUAL_PREDICTION", True)
     angle_dims = wm_config.get("ANGLE_DIMS")
-    angle_dims_set = set(angle_dims) if angle_dims else set()
     wm_input_dims = wm_config.get("WM_INPUT_DIMS")
     out_dim = wm_output_dim if wm_output_dim is not None else state_dim
     p_model = make_world_model(wm_config, out_dim)
@@ -119,15 +187,6 @@ def compare_dynamics(p_params, out_dir, wm_config, env_config, dynamics_fn,
     # reported s_pred matches the true-dynamics output.
     effective_output = eff_to_obs_fn is not None
     _wm_state_to_eff_fn = state_to_eff_fn if effective_output else None
-
-    from training.wm import _wrap_angle
-
-    def _per_dim_err(s_pred_col, s_true_col, d):
-        """Absolute error, using angular distance for wrapped-angle dims."""
-        diff = s_pred_col - s_true_col
-        if d in angle_dims_set:
-            diff = _wrap_angle(diff)
-        return jnp.abs(diff)
 
     # Eval batch: WM's training-support sampler, or uniform on STATE_RANGES.
     n_eval = n_heat * n_heat
@@ -143,29 +202,23 @@ def compare_dynamics(p_params, out_dir, wm_config, env_config, dynamics_fn,
             eval_rng, (n_eval, state_dim), minval=mins, maxval=maxs,
         )
 
-    dynamics_metrics = {}
+    # Metric core (shared with dynamics_nmse; no weighting here — the headline
+    # WM_NMSE is unweighted over the WM's training-support eval batch).
+    avg_nmse, avg_mse, dynamics_metrics = dynamics_nmse(
+        p_params, wm_config, env_config, dynamics_fn, eval_states,
+        action_dim, state_dim, weights=None,
+        state_to_eff_fn=state_to_eff_fn, eff_to_obs_fn=eff_to_obs_fn,
+        wm_output_dim=wm_output_dim,
+    )
     print(f"\n── Dynamics metrics ({n_eval} states) ──")
     for a in range(action_dim):
-        actions = jnp.full(n_eval, a)
-        s_true = dynamics_fn(eval_states, actions)
-        a_oh = jax.nn.one_hot(actions, action_dim)
-        s_pred = apply_wm(p_model, p_params, eval_states, a_oh, residual=residual,
-                          state_to_eff_fn=_wm_state_to_eff_fn,
-                          angle_dims=angle_dims, eff_to_obs_fn=eff_to_obs_fn,
-                          wm_input_dims=wm_input_dims)
-        parts = []
-        for d in range(state_dim):
-            abs_err = _per_dim_err(s_pred[:, d], s_true[:, d], d)
-            mse_d = float(jnp.mean(abs_err ** 2))
-            var_d = float(jnp.var(s_true[:, d]))
-            nmse_d = (mse_d / var_d) if var_d > 1e-12 else 0.0
-            dynamics_metrics[f"{action_names[a]}_{state_labels[d]}"] = {
-                "mse": mse_d, "nmse": nmse_d,
-            }
-            parts.append(f"{state_labels[d]}: MSE={mse_d:.1e} NMSE={nmse_d:.1e}")
+        parts = [
+            f"{state_labels[d]}: MSE={dynamics_metrics[k]['mse']:.1e} "
+            f"NMSE={dynamics_metrics[k]['nmse']:.1e}"
+            for d in range(state_dim)
+            for k in [f"{action_names[a]}_{state_labels[d]}"]
+        ]
         print(f"  {action_names[a]:>5s}: {', '.join(parts)}")
-    avg_mse = sum(m["mse"] for m in dynamics_metrics.values()) / len(dynamics_metrics)
-    avg_nmse = sum(m["nmse"] for m in dynamics_metrics.values()) / len(dynamics_metrics)
 
     # 2D sweep grid for the dynamics-quiver plot. Per-action true/pred
     # snapshots on a uniform grid in (d0, d1), off-axis dims pinned to

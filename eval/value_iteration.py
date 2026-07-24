@@ -289,16 +289,28 @@ def evaluate_pqn_on_grid(
 # ── Metrics helpers ──────────────────────────────────────────────────────────
 
 
-def _metrics(a, b):
+def _metrics(a, b, weights=None):
     """MSE / NMSE between reference a and prediction b (jax arrays).
 
     NMSE = MSE / Var(a) — unit-free, scale-invariant. NMSE = 0 means
     perfect prediction; NMSE = 1 means no better than predicting the
     mean of the reference. Equivalent to 1 - R².
+
+    weights: optional non-negative array broadcastable to a's shape. When given,
+    the MSE numerator is the visitation-WEIGHTED mean squared error, but the
+    denominator is ALWAYS the uniform variance Var(a). Using the uniform scale as
+    a fixed denominator makes the weighted and uniform NMSE directly comparable
+    and avoids the blow-up when the reference is nearly constant on the visited
+    support (weighted Var(a) → 0). Weights are normalised to sum 1 internally.
     """
     diff = a - b
-    var_a = float(jnp.var(a))
-    mse = float(jnp.mean(diff ** 2))
+    var_a = float(jnp.var(a))                     # fixed uniform-scale denominator
+    if weights is None:
+        mse = float(jnp.mean(diff ** 2))
+    else:
+        w = jnp.asarray(weights, dtype=jnp.float32)
+        w = w / (jnp.sum(w) + 1e-12)
+        mse = float(jnp.sum(w * diff ** 2))
     return {
         "mse": mse,
         "nmse": (mse / var_a) if var_a > 1e-12 else 0.0,
@@ -321,6 +333,59 @@ def _flatten(label, vm, qm_per_action):
     for aname, m in qm_per_action.items():
         out[f"{label}_Q_{aname}_mse"] = m["mse"]
         out[f"{label}_Q_{aname}_nmse"] = m["nmse"]
+    return out
+
+
+def q_nmse_by_weighting(
+    q_params, q_batch_stats, goal, mask, axis_grids,
+    all_next_states, all_rewards, all_dones,
+    pqn_config, action_dim, state_dim, bellman_fn,
+    gamma, vi_max_iter, convergence_threshold,
+    Q_star=None, weights=None,
+    state_to_obs_fn=None, obs_state_dim=None,
+):
+    """Q_NMSE of PQN's Q-values for one goal, computed both UNIFORMLY over the VI
+    grid and (optionally) WEIGHTED by a visitation distribution `weights`.
+
+    This is the metric-only core used by eval/track_q.py to answer the reviewers'
+    "uniform vs distributional Q-error" question. It reuses the goal-independent
+    precompute (dynamics/rewards/dones) and a jitted `bellman_fn` passed in, so it
+    is cheap to call across many checkpoints.
+
+    References for NMSE = MSE/Var:
+      - policy: Q^pi (policy evaluation under PQN's own greedy policy) vs Q_pqn.
+      - optimal (if Q_star given): Q* (Bellman-optimal) vs Q_pqn.
+    `weights` must be broadcastable to the VI grid shape ((R,)*state_dim).
+
+    Returns a flat dict with keys q_nmse_{policy,optimal}_{uniform,weighted}
+    (the *_weighted keys only when `weights` is not None; *optimal* only when
+    Q_star is given).
+    """
+    V_pqn, Q_pqn = evaluate_pqn_on_grid(
+        q_params, q_batch_stats, goal, mask, axis_grids,
+        pqn_config, action_dim, state_dim,
+        state_to_obs_fn=state_to_obs_fn, obs_state_dim=obs_state_dim,
+    )
+    pi_pqn = jnp.argmax(Q_pqn, axis=0).astype(jnp.int32)
+    _, Q_pi, _ = bellman_fn(
+        all_next_states, all_rewards, all_dones, axis_grids,
+        gamma, vi_max_iter, action_dim, convergence_threshold, pi_pqn,
+    )
+    Q_pi = jax.block_until_ready(Q_pi)
+
+    def _avg_nmse(ref, w):
+        return float(np.mean([
+            _metrics(ref[a], Q_pqn[a], weights=w)["nmse"]
+            for a in range(action_dim)
+        ]))
+
+    out = {"q_nmse_policy_uniform": _avg_nmse(Q_pi, None)}
+    if weights is not None:
+        out["q_nmse_policy_weighted"] = _avg_nmse(Q_pi, weights)
+    if Q_star is not None:
+        out["q_nmse_optimal_uniform"] = _avg_nmse(Q_star, None)
+        if weights is not None:
+            out["q_nmse_optimal_weighted"] = _avg_nmse(Q_star, weights)
     return out
 
 
