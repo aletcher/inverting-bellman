@@ -55,6 +55,8 @@ def main():
     ap.add_argument("--reuse", action="store_true", help="reuse existing npz if present")
     ap.add_argument("--wm_num_steps", type=int, default=None,
                     help="override WM_CONFIG NUM_STEPS (e.g. small value for a smoke test)")
+    ap.add_argument("--wm_batch_size", type=int, default=None,
+                    help="override WM_CONFIG BATCH_SIZE (smaller = cheaper/step on CPU)")
     ap.add_argument("--visitation_from", choices=["self", "final"], default="self",
                     help="weight each checkpoint by its OWN policy visitation (self) "
                          "or by the converged agent's visitation (final)")
@@ -64,6 +66,8 @@ def main():
     ctx = build_context(args.config)
     if args.wm_num_steps is not None:
         ctx["wm_config"]["NUM_STEPS"] = args.wm_num_steps
+    if args.wm_batch_size is not None:
+        ctx["wm_config"]["BATCH_SIZE"] = args.wm_batch_size
     env_stem = ctx["env_config"]["ENV_NAME"].lower()
     out_dir = args.out_dir or f"outputs/{env_stem}/recovery_vs_qerror"
     os.makedirs(out_dir, exist_ok=True)
