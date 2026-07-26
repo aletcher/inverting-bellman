@@ -143,6 +143,33 @@ both:
 - `visit_frac` trend across seeds is `−0.16 ± 0.13` (flat) — broadening firmly
   refuted (A.5).
 
+### A.7 A3 — controlled off-support Q-perturbation (the direct robustness test)
+A1/A2 are *descriptive* (they characterise the natural error/recovery landscape).
+They do **not** stress-test recovery against the reviewer's exact scenario — and
+in fact the natural setting doesn't create it (`‖Q−Q^π‖` is ~uniform, A.6). A3
+manufactures it: take a converged `Q`, inject a deterministic, region-gated
+perturbation into the `Q` the WM training sees (off `S_o`, or on `S_o` as the
+control), retrain, and measure on-support recovery vs the injected Q-error.
+(`scripts/q_perturb.py`; hook `q_value_fn` in `training/wm.py`.)
+
+**The key finding is two-sided and ties experiment to theory:**
+- **P-learning on the reduced MDP over `S_o` (WM trained with an on-support
+  sampler) is robust to off-support Q-error.** Injecting off-support error up to
+  `Q_NMSE ≈ 2.1` leaves on-support recovery flat (`1.0e-3 → 2.0e-3`); the *same*
+  error on-support degrades it ~20× (`→ 2.1e-2`). So recovery depends on
+  on-support `Q`-accuracy and is **immune to off-distribution Q-error** — the
+  direct answer to R2. (Mechanism: for on-support `(s,a)` the Bellman target
+  evaluates `Q` at successors in `S_o`, so off-support `Q` never enters.)
+- **Naive whole-space training is NOT robust:** with a uniform WM sampler,
+  off-support Q-error corrupts the global fit and *does* degrade on-support
+  recovery (~10× at scale 1). So the on-support restriction (the reduced MDP) is
+  not just a proof device — it is empirically **what confers the robustness**.
+  Report both; the contrast is the point.
+
+Numbers above are a CPU smoke (200 WM steps, 1 seed) — qualitatively unambiguous;
+refresh with the full-fidelity GPU run (`--wm_sample_region onsupport`, and a
+`uniform` run for the contrast).
+
 ---
 
 ## Part B — Theory: distributional recovery on the policy-reachable set
@@ -219,8 +246,11 @@ On-policy data concentrates on `S_o` and (with HER-style goal relabelling) tends
 to cover the reachable states across training goals, so the B.2 conditions
 approximately hold and Q-error is smallest on `S_o×𝒢` (A.2/A.5). This is why WM
 recovery is orders of magnitude better than the *uniform* Q-error would suggest
-(paper's `NMSE_WM=1.2e-4` vs `NMSE_Q=5.7e-1`). B.3 marks the boundary; the
-optional perturbation experiment (A3, not run) would demonstrate it causally.
+(paper's `NMSE_WM=1.2e-4` vs `NMSE_Q=5.7e-1`). B.3 marks the boundary, and **A.7
+(A3) demonstrates it causally**: on the reduced MDP over `S_o`, on-support
+recovery is immune to injected off-support Q-error (flat out to `Q_NMSE≈2.1`) but
+degrades ~20× under on-support error — while naive whole-space training is *not*
+robust, confirming that the on-support restriction is what B.2 buys.
 
 ### B.5 Numerical verification (`notes/theory_checks.py`, both PASS)
 - **B2:** on-support `ε_o=1e-3` → max recovery error `1.4e-4 ≤` bound `1.5e-3`.

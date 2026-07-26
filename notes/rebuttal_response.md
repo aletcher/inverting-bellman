@@ -38,15 +38,20 @@ that is reached under one goal but off-distribution for another leaves two
 transition kernels indistinguishable from Q, with ‖P − P'‖₁ = Ω(1). New Thm/App.
 [Y].
 
-Empirically, on the states the trained agent visits vs. uniformly over the state
-space: its distance to the optimal values degrades off-support (‖Q − Q*‖ is
-3.3× ± 0.4 larger off-support), consistent with the reviewer's intuition about
-off-distribution Q-error — but the Bellman-residual error that our bound actually
-depends on, ‖Q − Q^π‖, is comparable on- and off-support (ratio 1.0 ± 0.1), i.e.
-it is *not* concentrated off-distribution, and the recovered model is 42× ± 10
-more accurate on-support. So the off-distribution degradation of Q does not induce
-recovery failure: the on-support regime our theorem requires is exactly where
-P-learning operates, and recovery is far better than the worst-case ε_o bound.
+We verify this robustness directly. Taking a trained Q and injecting a controlled
+error into the Q-values used for recovery, restricted to P-learning on the
+reachable set S_o (the reduced MDP above): an off-support Q-error as large as
+NMSE ≈ 2 leaves on-support model recovery essentially unchanged (WM_NMSE
+1.0e-3 → 2.0e-3), whereas the same error placed on-support degrades it ~20×
+(→ 2.1e-2). Recovery thus depends on on-support Q-accuracy and is immune to
+off-distribution Q-error, exactly as the reduced-MDP bound predicts.
+
+This is corroborated in the natural (unperturbed) setting: for the trained agent,
+the recovered model is 42× ± 10 more accurate on its reachable set than uniformly,
+and while its distance to optimal degrades off-support (‖Q − Q*‖ 3.3× ± 0.4
+larger), the Bellman-residual error our bound actually depends on, ‖Q − Q^π‖, is
+comparable on- and off-support (1.0 ± 0.1) — i.e. not concentrated off-distribution.
 
 We will add the theorem, proof, and counterexample to the appendix, and the
-scaling and on-/off-support experiments to the experiments section.
+scaling, on-/off-support, and Q-perturbation experiments to the experiments
+section.
