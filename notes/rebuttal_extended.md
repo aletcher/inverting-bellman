@@ -1,7 +1,7 @@
 # Extended rebuttal notes — recovery quality vs Q-error, uniform vs distributional bounds
 
-Working reference for the two reviewer questions. Full detail here; the **short
-rebuttal text** to paste into the response box is in the last section.
+Working reference for the two reviewer questions. Full detail here; the concise,
+submission-ready response is a separate file, **`notes/rebuttal_response.md`**.
 
 - **R1 (empirical):** How does recovery quality scale with Q-function estimation error?
 - **R2 (theoretical):** Is P-learning robust to *realistic* (nonuniform, worst
@@ -227,29 +227,7 @@ after the ε-approximation definition; scaling + distributional figures into
 
 ---
 
-## Part C — SHORT rebuttal text (paste into the response)
-
-**R1 — recovery vs Q-error.** We added an experiment sweeping the ~20 training
-checkpoints of an agent as increasing-quality Q-functions and measuring, per
-checkpoint, both the Q-value error (Q_NMSE vs the true value of the induced
-policy) and the recovered-model error (WM_NMSE). Recovery error decreases
-monotonically with Q-error (Spearman ρ<0) and stays far below it
-(WM_NMSE ≪ Q_NMSE), consistent with Fig. [ref]. [Insert scatter + ρ.]
-
-**R2 — nonuniform / distributional Q-error.** Good point; the uniform ε is used
-only to bound the columns of the Bellman matrix M (the successor values). We can
-weaken it. The states an agent reaches, `S_o = ⋃_g Reach(π_g)`, are
-forward-invariant, so P-learning on `S_o` is a reduced MDP and our
-approximate-recovery bound applies verbatim with the **on-support** error `ε_o`
-and `M` restricted to `S_o`:
-`‖P̂(s,a)−P(s,a)‖₁ ≤ ‖M_{S_o}⁺‖₁(1+γm)ε_o` for `s∈S_o` (and identifiability then
-needs only `|𝒢|≥|S_o|`). So a distributional bound **does** suffice — with one
-caveat we now make explicit: because M couples all goals, `ε_o` must hold over
-`S_o` for *every* goal. This is necessary: if `Q` is wrong at an off-support
-successor (e.g. a state reached under one goal but not another), two kernels can
-agree with `Q` on the entire reachable set yet differ by `Ω(1)` — we give a
-3-state counterexample (App. [ref]). Empirically the conditions hold for the
-trained agent: on the reachable set (vs uniformly) its Q\*-error is ~4.6× smaller
-and the recovered-model error ~32× smaller [Fig. ref], which is why the recovered
-model is accurate despite large worst-case Q-error. Full statements, proof, and
-counterexample in App. [ref].
+## Part C — Reviewer response
+The concise, submission-ready reviewer response lives in its own file:
+**`notes/rebuttal_response.md`**. Keep it short (numbers, no plots); this extended
+file is the working reference behind it.
