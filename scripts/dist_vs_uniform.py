@@ -29,7 +29,8 @@ from eval.track_recovery import track_recovery_for_run
 from plotting.style import set_paper_style, unset_paper_style, COLOR_TRUE, COLOR_WM
 
 
-def _load_or_track(run_dir, ctx, max_ckpts, goal_indices, reuse, visitation_from):
+def _load_or_track(run_dir, ctx, max_ckpts, goal_indices, reuse, visitation_from,
+                   weight_mode):
     npz = os.path.join(run_dir, "recovery_track", "recovery_tracking.npz")
     if reuse and os.path.exists(npz):
         print(f"Reusing {npz}")
@@ -43,7 +44,7 @@ def _load_or_track(run_dir, ctx, max_ckpts, goal_indices, reuse, visitation_from
         env_terminated_fn=ctx["env_terminated_fn"], state_to_eff_fn=ctx["state_to_eff_fn"],
         eff_to_obs_fn=ctx["eff_to_obs_fn"], wm_output_dim=ctx["wm_output_dim"],
         wm_sample_fn=ctx["wm_sample_fn"], goal_indices=goal_indices, max_ckpts=max_ckpts,
-        visitation_from=visitation_from)
+        visitation_from=visitation_from, weight_mode=weight_mode)
 
 
 def _spearman(x, y):
@@ -64,6 +65,7 @@ def main():
     ap.add_argument("--reuse", action="store_true")
     ap.add_argument("--wm_num_steps", type=int, default=None)
     ap.add_argument("--visitation_from", choices=["self", "final"], default="self")
+    ap.add_argument("--weight_mode", choices=["mask", "density"], default="mask")
     args = ap.parse_args()
 
     goal_indices = ([int(x) for x in args.goals.split(",")] if args.goals else None)
@@ -75,7 +77,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     per_seed = [_load_or_track(rd, ctx, args.max_ckpts, goal_indices, args.reuse,
-                               args.visitation_from)
+                               args.visitation_from, args.weight_mode)
                 for rd in args.run_dirs]
 
     def cat(k):

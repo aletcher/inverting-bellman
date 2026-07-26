@@ -53,6 +53,31 @@ def _weights_at_states(states_grid, w, state_ranges):
     return w.reshape(-1)[lin]
 
 
+def _to_weights(w, weight_mode, mass=0.99):
+    """Convert a visitation density grid `w` into the weighting used for the
+    on-support metrics.
+
+    - "mask" (default): the reachable SET S_o — a binary indicator of the cells
+      covering the top `mass` fraction of visitation (dropping the rare-excursion
+      tail), weighted uniformly. This matches the theory (S_o is a set, not a
+      density) and is far less noisy than density-weighting, which peaks on a few
+      goal-boundary cells where Q is hardest to estimate.
+    - "density": the raw visitation density (previous behaviour).
+    """
+    if weight_mode == "density":
+        return w
+    if weight_mode != "mask":
+        raise ValueError(f"weight_mode must be 'mask' or 'density', got {weight_mode!r}")
+    flat = w.reshape(-1)
+    order = jnp.argsort(flat)[::-1]
+    csum = jnp.cumsum(flat[order]) / (jnp.sum(flat) + 1e-12)
+    keep_sorted = csum <= mass
+    # always keep at least the top cell
+    keep_sorted = keep_sorted.at[0].set(True)
+    mask = jnp.zeros_like(flat).at[order].set(keep_sorted.astype(flat.dtype))
+    return mask.reshape(w.shape)
+
+
 def track_recovery_for_run(
     run_dir, pqn_config, wm_config, env_config,
     basic_env, env_params, goals, goal_masks,
@@ -63,6 +88,7 @@ def track_recovery_for_run(
     wm_output_dim=None, wm_sample_fn=None,
     goal_indices=None, max_ckpts=None, n_visit_starts=512,
     n_wm_eval=None, subdir="recovery_track", visitation_from="self",
+    weight_mode="mask",
 ):
     """Track Q_NMSE + WM_NMSE (uniform & visitation-weighted) per checkpoint.
 
@@ -185,10 +211,13 @@ def track_recovery_for_run(
         t0 = time.time()
         q_params, q_bs, n_updates = _load(path)
 
-        # Per-checkpoint (or fixed) visitation weights.
+        # Per-checkpoint (or fixed) visitation. `w` is the raw density (used for
+        # the breadth report); `w_eff` is the weighting for the on-support metrics
+        # (reachable-set mask by default — see _to_weights).
         w = w_fixed if w_fixed is not None else _visit(q_params, q_bs)
-        eval_weights = _weights_at_states(eval_states_grid, w, state_ranges)
         visit_frac, visit_entropy = _breadth(w)
+        w_eff = _to_weights(w, weight_mode)
+        eval_weights = _weights_at_states(eval_states_grid, w_eff, state_ranges)
 
         # Q_NMSE averaged over goals (uniform + visitation-weighted + optimal).
         acc = {}
@@ -198,7 +227,7 @@ def track_recovery_for_run(
                 q_params, q_bs, goal_j, mask_j, axis_grids,
                 all_next_states, rew, dn, pqn_config, action_dim, state_dim,
                 bellman_fn, gamma, vi_max_iter, conv,
-                Q_star=goal_qstar[gi], weights=w,
+                Q_star=goal_qstar[gi], weights=w_eff,
                 state_to_obs_fn=state_to_obs_fn, obs_state_dim=obs_state_dim)
             for k, v in d.items():
                 acc.setdefault(k, []).append(v)
