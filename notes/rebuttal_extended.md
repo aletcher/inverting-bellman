@@ -107,33 +107,35 @@ faster and traces a thinner, roughly-constant manifold. Global recovery improves
 because the model gets better *everywhere*, not because coverage grows. Do not
 use the broadening framing.
 
-### A.6 Observed results (1 seed, GPU, 20 checkpoints)
+### A.6 Observed results (5 seeds, GPU, 20 checkpoints; mean ± SE)
 Headline signals are strong and support both reviewer points.
 
 - **R1 — scaling (all checkpoints):** recovery scales with Q-error,
-  `Spearman(Q_NMSE, WM_NMSE) = +0.83` (p=7e-6); `WM_NMSE_uniform` falls
-  monotonically (ρ=−0.96); `WM_NMSE ≪ Q_NMSE` throughout.
+  `Spearman(Q_NMSE, WM_NMSE) = 0.84 ± 0.03` (per-seed; pooled 100 pts
+  ρ=0.85, p=2e-28); `WM_NMSE_uniform` falls monotonically (ρ=−0.95 ± 0.01);
+  `WM_NMSE ≪ Q_NMSE` throughout (≈22× at convergence).
 - **R2 — distributional, at the converged agent (step ≥ 200, "the trained
-  agent"):** on the reachable set vs uniform —
-  `Q*_NMSE` 0.033 vs 0.151 (**4.6×** smaller), `WM_NMSE` 2.3e-4 vs 7.3e-3
-  (**32×** smaller). So for the trained agent the on-support bound is the
-  operative one, exactly as Theorem B2 predicts.
-- **Recovery is ~10× (median) better on `S_o` than uniform at every checkpoint**,
-  even early ones where global Q_NMSE is ~1–2 — recovery on the visited region is
+  agent"):** on the reachable set vs uniform, ratio of means over the region —
+  `Q*_NMSE` **3.3× ± 0.4** smaller (0.038 vs 0.117), `WM_NMSE` **42× ± 10**
+  smaller (2.2e-4 vs 7.0e-3; per-seed range 16–67×). So for the trained agent the
+  on-support bound is the operative one, as Theorem B2 predicts.
+- **Recovery is tens-of-× better on `S_o` than uniform at every checkpoint**, even
+  early ones where global Q_NMSE is ~1–2 — recovery on the visited region is
   robust even where `Q` is globally poor.
 
 **Honest nuances (report, don't hide):**
-- Lead the on-support comparison with **`Q*`** (optimal, a fixed reference), not
-  `Q^π` — the latter's on-support value inherits the policy's mid-training
-  wandering.
+- Lead the on-support Q comparison with **`Q*`** (distance to optimal, a fixed
+  reference; 3.3× smaller). The **`Q^π`**-error (Bellman self-consistency) is
+  **≈1.0× ± 0.1** on-support vs uniform — i.e. *not* smaller — because it inherits
+  the policy and PQN's residual is similar on- and off-support. Recovery is far
+  better on-support regardless, which is the point.
 - **Mid-training (steps ~50–185) the on-support `Q^π`-error rises to ≈/above
   uniform**: during the Q-instability spike the greedy policy chases states where
   its own `Q` is wrong. Real, and not part of the R2 claim (those checkpoints are
-  not the trained agent). Recovery (`WM_NMSE_visit`) stays low regardless — a
-  sharper form of the paper's WM≫Q result.
-- Per-point values are one seed; CPU-vs-GPU / seed noise makes single trajectories
-  jittery. Report **≥3 seeds with error bars** for the final figures — the trends
-  above are what's stable.
+  not the trained agent). `WM_NMSE_visit` stays low regardless — a sharper form of
+  the paper's WM≫Q result.
+- `visit_frac` trend across seeds is `−0.16 ± 0.13` (flat) — broadening firmly
+  refuted (A.5).
 
 ---
 
