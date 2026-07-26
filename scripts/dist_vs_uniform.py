@@ -26,7 +26,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from eval.run_context import build_context
 from eval.track_recovery import track_recovery_for_run
-from plotting.style import set_paper_style, unset_paper_style, COLOR_TRUE, COLOR_WM
+from plotting.style import (
+    set_paper_style, unset_paper_style, COLOR_TRUE, COLOR_WM, COLOR_GOAL,
+)
 
 
 def _load_or_track(run_dir, ctx, max_ckpts, goal_indices, reuse, visitation_from,
@@ -80,66 +82,76 @@ def main():
                                args.visitation_from, args.weight_mode)
                 for rd in args.run_dirs]
 
-    def cat(k):
-        return np.concatenate([d[k] for d in per_seed])
+    steps = per_seed[0]["n_updates"]
+    aligned = all(np.array_equal(d["n_updates"], steps) for d in per_seed)
+    S = len(per_seed)
+    conv = steps >= 200                       # "the trained agent"
 
-    q_u, q_v = cat("q_nmse_policy_uniform"), cat("q_nmse_policy_weighted")
-    wm_u, wm_v = cat("wm_nmse_uniform"), cat("wm_nmse_visit")
+    def stack(k):
+        return np.stack([d[k] for d in per_seed])          # (S, N)
 
-    # Does recovery track on-visitation Q-error more tightly than uniform?
-    rho_vv, _ = _spearman(q_v, wm_v)   # visitation Q-error ↔ visitation recovery
-    rho_uv, _ = _spearman(q_u, wm_v)   # uniform Q-error ↔ visitation recovery
+    def band(ax, x, M, color, label, ls="-", marker="o"):
+        m = M.mean(0)
+        ax.plot(x, m, color=color, ls=ls, marker=marker, ms=4, label=label)
+        if M.shape[0] > 1:
+            se = M.std(0, ddof=1) / np.sqrt(M.shape[0])
+            ax.fill_between(x, m - se, m + se, color=color, alpha=0.15)
+
+    def conv_ratio(ku, ko):
+        """Per-seed ratio of means over the converged region; return mean, SE."""
+        r = np.array([d[ku][conv].mean() / d[ko][conv].mean() for d in per_seed])
+        return r.mean(), (r.std(ddof=1) / np.sqrt(S) if S > 1 else 0.0), r
 
     set_paper_style()
-    # ── Panel plot: uniform vs visitation for Q and WM across checkpoints ──
-    fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.6))
-    for d in per_seed:
-        s = d["n_updates"]
-        axes[0].plot(s, d["q_nmse_policy_uniform"], color=COLOR_TRUE, marker="o",
-                     label="uniform")
-        axes[0].plot(s, d["q_nmse_policy_weighted"], color=COLOR_WM, marker="s",
-                     linestyle="--", label="visitation-weighted")
-        axes[1].plot(s, d["wm_nmse_uniform"], color=COLOR_TRUE, marker="o",
-                     label="uniform")
-        axes[1].plot(s, d["wm_nmse_visit"], color=COLOR_WM, marker="s",
-                     linestyle="--", label="visitation")
-    for ax, ttl in zip(axes, [r"$Q_{\mathrm{NMSE}}$", r"$\mathrm{WM}_{\mathrm{NMSE}}$"]):
-        ax.set_yscale("log"); ax.set_xlabel("PQN update step"); ax.set_title(ttl)
-    axes[0].set_ylabel("NMSE")
-    # Visitation breadth on the WM panel: the on-support region grows as the
-    # agent trains, so WM_visit can stay low while WM_uniform falls with coverage.
-    if all("visit_frac" in d for d in per_seed):
-        axb = axes[1].twinx(); axb.grid(False)
-        for d in per_seed:
-            axb.plot(d["n_updates"], 100.0 * d["visit_frac"], color="0.5",
-                     linestyle=":", marker="^", markersize=4)
-        axb.set_ylabel("visited cells (%)", color="0.4")
-        axb.tick_params(axis="y", labelcolor="0.4")
-    # de-duplicate legend labels
-    h, l = axes[0].get_legend_handles_labels()
-    seen = dict(zip(l, h)); axes[0].legend(seen.values(), seen.keys(), fontsize=8)
-    fig.suptitle("Uniform vs visitation-weighted (Q-error and recovery)")
-    fig.tight_layout(); fig.savefig(f"{out_dir}/qerr_uniform_vs_visit.png"); plt.close(fig)
+    fig, ax = plt.subplots(1, 2, figsize=(11.0, 4.0))
 
-    # ── Scatter: recovery vs Q-error, both weightings ──
-    fig, ax = plt.subplots(figsize=(5.2, 4.0))
-    ax.scatter(q_u, wm_u, s=34, color=COLOR_TRUE, alpha=0.8, edgecolor="white",
-               linewidth=0.6, label=rf"uniform ($\rho_s={rho_uv:.2f}$ vs $WM_{{visit}}$)")
-    ax.scatter(q_v, wm_v, s=34, color=COLOR_WM, alpha=0.8, edgecolor="white",
-               linewidth=0.6, label=rf"visitation ($\rho_s={rho_vv:.2f}$)")
-    ax.set_xscale("log"); ax.set_yscale("log")
-    ax.set_xlabel(r"$Q_{\mathrm{NMSE}}$"); ax.set_ylabel(r"$\mathrm{WM}_{\mathrm{NMSE}}$")
-    ax.set_title("Recovery tracks visitation-weighted Q-error")
-    ax.legend(fontsize=8)
-    fig.tight_layout(); fig.savefig(f"{out_dir}/recovery_tracks_visit.png"); plt.close(fig)
+    # ── Panel A — Q-error: Q^pi (theorem's ε) and Q* (distance to optimal),
+    #    each uniform (solid) vs on reachable set (dashed). Q^pi curves overlap
+    #    (~1x); Q* dashed sits below Q* solid (closer to optimal on-support). ──
+    if aligned:
+        band(ax[0], steps, stack("q_nmse_policy_uniform"), COLOR_TRUE,
+             r"$\|Q-Q^\pi\|$ uniform", ls="-", marker="o")
+        band(ax[0], steps, stack("q_nmse_policy_weighted"), COLOR_TRUE,
+             r"$\|Q-Q^\pi\|$ on $S_o$", ls="--", marker="s")
+        band(ax[0], steps, stack("q_nmse_optimal_uniform"), COLOR_GOAL,
+             r"$\|Q-Q^*\|$ uniform", ls="-", marker="o")
+        band(ax[0], steps, stack("q_nmse_optimal_weighted"), COLOR_GOAL,
+             r"$\|Q-Q^*\|$ on $S_o$", ls="--", marker="s")
+    ax[0].set_yscale("log"); ax[0].set_xlabel("PQN update step")
+    ax[0].set_ylabel("Q NMSE"); ax[0].set_title("Q-error: uniform vs on-support")
+    ax[0].axvspan(200, steps.max(), color="green", alpha=0.06)
+    ax[0].legend(fontsize=7.5, ncol=1)
+
+    # ── Panel B — recovered-model error: uniform vs on reachable set. ──
+    if aligned:
+        band(ax[1], steps, stack("wm_nmse_uniform"), COLOR_TRUE, "uniform", ls="-", marker="o")
+        band(ax[1], steps, stack("wm_nmse_visit"), COLOR_WM, r"on $S_o$", ls="--", marker="s")
+    ax[1].set_yscale("log"); ax[1].set_xlabel("PQN update step")
+    ax[1].set_ylabel(r"$\mathrm{WM}_{\mathrm{NMSE}}$")
+    ax[1].set_title("Recovery error: uniform vs on-support")
+    ax[1].axvspan(200, steps.max(), color="green", alpha=0.06)
+    ax[1].annotate("trained\nagent", (0.5 * (200 + steps.max()), ax[1].get_ylim()[1]),
+                   ha="center", va="top", fontsize=7, color="green")
+    ax[1].legend(fontsize=8)
+
+    fig.suptitle(rf"On-support (reachable set $S_o$) vs uniform  --  {S} seeds, mean $\pm$ SE")
+    fig.tight_layout(); fig.savefig(f"{out_dir}/onoff_summary.png"); plt.close(fig)
     unset_paper_style()
 
-    np.savez(f"{out_dir}/dist.npz", q_uniform=q_u, q_visit=q_v,
-             wm_uniform=wm_u, wm_visit=wm_v, rho_visit=rho_vv, rho_uniform=rho_uv)
-    print(f"\nmean Q_NMSE  uniform={q_u.mean():.3e}  visit={q_v.mean():.3e}")
-    print(f"mean WM_NMSE uniform={wm_u.mean():.3e}  visit={wm_v.mean():.3e}")
-    print(f"Spearman(WM_visit, Q_visit)={rho_vv:.3f}  vs  (WM_visit, Q_uniform)={rho_uv:.3f}")
-    print(f"Wrote {out_dir}/qerr_uniform_vs_visit.png, recovery_tracks_visit.png, dist.npz")
+    # ── Converged-region numbers (mean ± SE ratios) ──
+    qpi_m, qpi_se, _ = conv_ratio("q_nmse_policy_uniform", "q_nmse_policy_weighted")
+    qopt_m, qopt_se, _ = conv_ratio("q_nmse_optimal_uniform", "q_nmse_optimal_weighted")
+    wm_m, wm_se, wm_r = conv_ratio("wm_nmse_uniform", "wm_nmse_visit")
+    np.savez(f"{out_dir}/dist.npz",
+             q_uniform=stack("q_nmse_policy_uniform"), q_visit=stack("q_nmse_policy_weighted"),
+             qopt_uniform=stack("q_nmse_optimal_uniform"), qopt_visit=stack("q_nmse_optimal_weighted"),
+             wm_uniform=stack("wm_nmse_uniform"), wm_visit=stack("wm_nmse_visit"),
+             n_updates=steps)
+    print(f"\nConverged agent (step>=200), on-support vs uniform, ratio of means ({S} seeds):")
+    print(f"  ||Q-Q^pi|| : {qpi_m:.2f}x +- {qpi_se:.2f}   (~1x: not concentrated off-support)")
+    print(f"  ||Q-Q*||   : {qopt_m:.2f}x +- {qopt_se:.2f}   (Q degrades off-support)")
+    print(f"  WM_NMSE    : {wm_m:.1f}x +- {wm_se:.1f}   (recovery far better on-support)  per-seed {np.round(wm_r,1)}")
+    print(f"Wrote {out_dir}/onoff_summary.png, dist.npz")
 
 
 if __name__ == "__main__":

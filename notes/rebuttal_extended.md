@@ -116,19 +116,25 @@ Headline signals are strong and support both reviewer points.
   `WM_NMSE ≪ Q_NMSE` throughout (≈22× at convergence).
 - **R2 — distributional, at the converged agent (step ≥ 200, "the trained
   agent"):** on the reachable set vs uniform, ratio of means over the region —
-  `Q*_NMSE` **3.3× ± 0.4** smaller (0.038 vs 0.117), `WM_NMSE` **42× ± 10**
-  smaller (2.2e-4 vs 7.0e-3; per-seed range 16–67×). So for the trained agent the
-  on-support bound is the operative one, as Theorem B2 predicts.
+  `WM_NMSE` **42× ± 10** smaller (2.2e-4 vs 7.0e-3; per-seed range 16–67×). So for
+  the trained agent the on-support bound is the operative one, as Theorem B2
+  predicts.
 - **Recovery is tens-of-× better on `S_o` than uniform at every checkpoint**, even
   early ones where global Q_NMSE is ~1–2 — recovery on the visited region is
   robust even where `Q` is globally poor.
 
-**Honest nuances (report, don't hide):**
-- Lead the on-support Q comparison with **`Q*`** (distance to optimal, a fixed
-  reference; 3.3× smaller). The **`Q^π`**-error (Bellman self-consistency) is
-  **≈1.0× ± 0.1** on-support vs uniform — i.e. *not* smaller — because it inherits
-  the policy and PQN's residual is similar on- and off-support. Recovery is far
-  better on-support regardless, which is the point.
+**Q-error: use BOTH metrics, each in its correct role (not Q\* alone).**
+The theorem's ε is `‖Q − Q^π‖` (Bellman residual, results.tex:7), NOT distance to
+optimal. The two metrics say complementary things and the strongest rebuttal uses
+both:
+- **`Q*`-error is 3.3× ± 0.4 larger off-support** (0.038 on vs 0.117 uniform) —
+  Q *does* degrade off-distribution in the usual sense; this **concedes** the
+  reviewer's premise.
+- **`Q^π`-error is ≈1.0× ± 0.1** (uniform, per-seed 0.8–1.4) — the error our bound
+  actually depends on is **not** concentrated off-support; the feared off-support
+  blow-up doesn't occur for the relevant metric.
+- Do **not** present `Q*` alone as "on-support Q-error is smaller" — that swaps
+  distance-to-optimal for approximation error and a theory reviewer will catch it.
 - **Mid-training (steps ~50–185) the on-support `Q^π`-error rises to ≈/above
   uniform**: during the Q-instability spike the greedy policy chases states where
   its own `Q` is wrong. Real, and not part of the R2 claim (those checkpoints are

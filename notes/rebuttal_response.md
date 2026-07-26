@@ -38,13 +38,15 @@ that is reached under one goal but off-distribution for another leaves two
 transition kernels indistinguishable from Q, with ‖P − P'‖₁ = Ω(1). New Thm/App.
 [Y].
 
-Empirically these conditions hold for the trained agent. Restricted to the states
-it actually visits (vs. uniformly over the state space), the trained agent's
-optimal-Q error is 3.3× ± 0.4 smaller and its recovered-model error 42× ± 10
-smaller — i.e. the on-support regime, not the uniform worst case, is the operative
-one. (We also note the recovered model is markedly more accurate than Q even where
-the Q-function itself is not especially accurate on-support — a strong form of the
-"world model ≫ Q-values" phenomenon.)
+Empirically, on the states the trained agent visits vs. uniformly over the state
+space: its distance to the optimal values degrades off-support (‖Q − Q*‖ is
+3.3× ± 0.4 larger off-support), consistent with the reviewer's intuition about
+off-distribution Q-error — but the Bellman-residual error that our bound actually
+depends on, ‖Q − Q^π‖, is comparable on- and off-support (ratio 1.0 ± 0.1), i.e.
+it is *not* concentrated off-distribution, and the recovered model is 42× ± 10
+more accurate on-support. So the off-distribution degradation of Q does not induce
+recovery failure: the on-support regime our theorem requires is exactly where
+P-learning operates, and recovery is far better than the worst-case ε_o bound.
 
 We will add the theorem, proof, and counterexample to the appendix, and the
 scaling and on-/off-support experiments to the experiments section.
