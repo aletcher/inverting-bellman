@@ -141,12 +141,18 @@ def world_model_loss_sampled(
     state_to_eff_fn=None,
     eff_to_obs_fn=None,
     wm_output_dim=None,
+    q_value_fn=None,
 ):
     """||Q(s,a,g) - M(P(s,a),g)||^p with independently sampled (s, a, g) tuples.
 
     If eff_to_obs_fn is provided, the WM predicts in the effective state space
     (dim = wm_output_dim, e.g. 4 for Reacher) and is lifted back to obs space
     via eff_to_obs_fn for reward/done.
+
+    q_value_fn(obs, goal_repr) -> q[n, action_dim] overrides the Q-network query
+    (both the target and the bootstrap). Used by the off-support Q-perturbation
+    experiment (scripts/q_perturb.py) to inject region-gated, deterministic
+    Q-error. When None, the raw PQN network is used (default, unchanged).
     """
     out_dim = wm_output_dim if wm_output_dim is not None else state_dim
     p_model = make_world_model(wm_config, out_dim)
@@ -171,10 +177,15 @@ def world_model_loss_sampled(
     network = make_q_network(pqn_config)
     q_vars = {"params": q_params, "batch_stats": q_batch_stats}
 
-    q_all = network.apply(q_vars, batch_s, goal_repr, train=False)
+    def _q(obs, gr):
+        if q_value_fn is not None:
+            return q_value_fn(obs, gr)
+        return network.apply(q_vars, obs, gr, train=False)
+
+    q_all = _q(batch_s, goal_repr)
     target = q_all[jnp.arange(n), batch_a]
 
-    q_pred = network.apply(q_vars, s_pred_obs, goal_repr, train=False)
+    q_pred = _q(s_pred_obs, goal_repr)
     v_pred = jnp.max(q_pred, axis=-1)
 
     r_pred = compute_reward(s_pred_obs, batch_goal, batch_mask, reward_type, sigma, a_threshold)
@@ -201,6 +212,7 @@ def train_world_model(
     state_to_eff_fn=None,
     eff_to_obs_fn=None,
     wm_output_dim=None,
+    q_value_fn=None,
 ):
     """Train world model P(s,a) -> s'. Returns (p_params, step_losses).
 
@@ -292,6 +304,7 @@ def train_world_model(
             state_to_eff_fn,
             eff_to_obs_fn,
             wm_output_dim,
+            q_value_fn,
         )
 
         updates, opt_state = tx.update(grads, opt_state, p_params)
