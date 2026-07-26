@@ -89,34 +89,51 @@ Both Q-error and recovery-error are **smaller on the visited region** than
 uniformly — the empirical signature of A.5. (Absolute WM_NMSE is inflated by the
 50-step smoke WM; the full GPU run uses 20 000 steps.)
 
-### A.5 Per-checkpoint vs final visitation (`--visitation_from`)
+### A.5 On-support weighting (`--weight_mode`, `--visitation_from`)
 Each checkpoint is weighted by **its own** greedy-policy visitation
-(`visitation_from="self"`, default) — i.e. `Reach(π)` for the *current* policy,
-which is the correct on-support region for that checkpoint's `Q`. (`"final"`
-reuses the converged agent's visitation for all checkpoints.) The tracker also
-records visitation **breadth** per checkpoint (`visit_frac` = fraction of grid
-cells occupied, `visit_entropy`), plotted on the WM panel of A2.
+(`visitation_from="self"`, default). The on-support region is the reachable
+**set** `S_o` — a binary mask of the cells covering the top 99% of visitation
+mass (`weight_mode="mask"`, default), matching the theory (`S_o` is a set) and
+avoiding the high variance of density-weighting, which peaked on the few
+goal-boundary cells where `Q` is hardest. (`weight_mode="density"` and
+`visitation_from="final"` remain available.)
 
-**Hypothesis this exposes.** The reachable set *grows* as the agent trains, so:
-- **on-visitation** recovery error (`WM_NMSE_visit`) may be **low at all
-  checkpoints** — even early ones — because the WM recovers dynamics well
-  wherever the current policy actually goes and `Q` is accurate there;
-- **uniform/global** recovery error (`WM_NMSE_uniform`) falls **only as training
-  progresses**, because coverage broadens (`visit_frac` rises) and the model
-  becomes accurate over an increasing fraction of the box.
+**A refuted sub-hypothesis (kept as a note).** We initially expected the
+reachable set to *broaden* over training (`visit_frac ↑`), which would explain
+`WM_NMSE_uniform` falling while `WM_NMSE_visit` stayed flat. The data refute it:
+`visit_frac` is flat/slightly-decreasing (ρ=−0.39). This is correct behaviour,
+not a bug — MountainCar terminates on goal, so a *better* policy reaches goals
+faster and traces a thinner, roughly-constant manifold. Global recovery improves
+because the model gets better *everywhere*, not because coverage grows. Do not
+use the broadening framing.
 
-This is the sharpest empirical statement of the reduced-MDP picture (Part B):
-recovery is essentially always good on `Reach(π)`; what improves over training is
-the *size* of `Reach(π)`, not the on-support recovery quality.
+### A.6 Observed results (1 seed, GPU, 20 checkpoints)
+Headline signals are strong and support both reviewer points.
 
-### A.6 Expected full-run claims
-- **A1:** monotone recovery-vs-Q-error scaling; `WM_NMSE ≪ Q_NMSE`; Spearman
-  `ρ(WM_NMSE, Q_NMSE)<0` significant.
-- **A2:** `WM_NMSE_visit < WM_NMSE_uniform`; `WM_NMSE_visit` low and roughly flat
-  across checkpoints while `WM_NMSE_uniform` falls with rising `visit_frac`
-  (A.5); recovery error tracks *visitation-weighted* Q-error more tightly than
-  uniform Q-error — validating that the reduced-MDP conditions (Part B)
-  approximately hold in practice.
+- **R1 — scaling (all checkpoints):** recovery scales with Q-error,
+  `Spearman(Q_NMSE, WM_NMSE) = +0.83` (p=7e-6); `WM_NMSE_uniform` falls
+  monotonically (ρ=−0.96); `WM_NMSE ≪ Q_NMSE` throughout.
+- **R2 — distributional, at the converged agent (step ≥ 200, "the trained
+  agent"):** on the reachable set vs uniform —
+  `Q*_NMSE` 0.033 vs 0.151 (**4.6×** smaller), `WM_NMSE` 2.3e-4 vs 7.3e-3
+  (**32×** smaller). So for the trained agent the on-support bound is the
+  operative one, exactly as Theorem B2 predicts.
+- **Recovery is ~10× (median) better on `S_o` than uniform at every checkpoint**,
+  even early ones where global Q_NMSE is ~1–2 — recovery on the visited region is
+  robust even where `Q` is globally poor.
+
+**Honest nuances (report, don't hide):**
+- Lead the on-support comparison with **`Q*`** (optimal, a fixed reference), not
+  `Q^π` — the latter's on-support value inherits the policy's mid-training
+  wandering.
+- **Mid-training (steps ~50–185) the on-support `Q^π`-error rises to ≈/above
+  uniform**: during the Q-instability spike the greedy policy chases states where
+  its own `Q` is wrong. Real, and not part of the R2 claim (those checkpoints are
+  not the trained agent). Recovery (`WM_NMSE_visit`) stays low regardless — a
+  sharper form of the paper's WM≫Q result.
+- Per-point values are one seed; CPU-vs-GPU / seed noise makes single trajectories
+  jittery. Report **≥3 seeds with error bars** for the final figures — the trends
+  above are what's stable.
 
 ---
 
@@ -231,7 +248,8 @@ caveat we now make explicit: because M couples all goals, `ε_o` must hold over
 `S_o` for *every* goal. This is necessary: if `Q` is wrong at an off-support
 successor (e.g. a state reached under one goal but not another), two kernels can
 agree with `Q` on the entire reachable set yet differ by `Ω(1)` — we give a
-3-state counterexample (App. [ref]). Empirically the conditions approximately
-hold: recovery error tracks *visitation-weighted* Q-error far more tightly than
-uniform Q-error [Fig. ref], which is why the recovered model is accurate despite
-large worst-case Q-error. Full statements, proof, and counterexample in App. [ref].
+3-state counterexample (App. [ref]). Empirically the conditions hold for the
+trained agent: on the reachable set (vs uniformly) its Q\*-error is ~4.6× smaller
+and the recovered-model error ~32× smaller [Fig. ref], which is why the recovered
+model is accurate despite large worst-case Q-error. Full statements, proof, and
+counterexample in App. [ref].
