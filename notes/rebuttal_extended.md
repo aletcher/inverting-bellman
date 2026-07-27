@@ -176,10 +176,27 @@ boundary.** On the reduced MDP over `S_o`, sweeping injected error magnitude:
   which error matters — reinforcing that the on-support restriction is what B2
   buys.
 
-Honest framing for the response: lead with the **matched-magnitude contrast**
-(recovery ~700× more sensitive to on- than off-support error at realistic scale)
-and present the breakdown as the **B3 boundary**, not as "immune to any
-off-support error".
+**Why the WM breaks at all (and why it does NOT contradict B2).** Training
+on-support constrains the sampled states `s∈S_o`, not the WM's *predicted
+successor* `s'=WM(s,a)`. The Bellman loss bootstraps through `max Q(s',·)`, and
+`s'` is unconstrained; so off-support Q enters whenever the WM predicts a
+successor that leaves `S_o`. The theorem's estimator `M_{S_o}⁺Q` reads Q only on
+`S_o` columns *by construction* — the WM is an *unconfined* approximation of it.
+
+**`--confine` (project every Q-query onto `S_o`) confirms this exactly.** Then the
+bootstrap never reads off-support Q, and off-support perturbation produces
+*byte-identical* WM training (same loss trajectory and `WM_NMSE` at scales 0, 1,
+2) — recovery is immune at **any** magnitude, while on-support perturbation still
+degrades it. This is the definitive B2 confirmation: the estimator the theorem
+analyses is exactly immune to off-support Q-error; the unconfined WM inherits the
+robustness only until off-support error grows large enough to lure its successors
+off `S_o` (B3).
+
+Honest framing for the response: the **confined estimator** (`M_{S_o}⁺Q`, i.e.
+`--confine`) is provably and empirically immune to off-support Q-error at any
+magnitude; the **unconfined WM** inherits this at realistic error and breaks only
+under large adversarial off-support error (the B3 boundary), because it is free
+to leave `S_o`.
 
 ---
 
