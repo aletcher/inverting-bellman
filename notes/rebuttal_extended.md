@@ -111,14 +111,13 @@ use the broadening framing.
 Headline signals are strong and support both reviewer points.
 
 - **R1 — scaling (all checkpoints):** recovery scales with Q-error,
-  `Spearman(Q_NMSE, WM_NMSE) = 0.84 ± 0.03` (per-seed; pooled 100 pts
-  ρ=0.85, p=2e-28); `WM_NMSE_uniform` falls monotonically (ρ=−0.95 ± 0.01);
-  `WM_NMSE ≪ Q_NMSE` throughout (≈22× at convergence).
+  `Spearman(Q_NMSE, WM_NMSE) = 0.83 ± 0.03` (per-seed; pooled 100 pts
+  ρ=0.83, p=8e-27); `WM_NMSE ≪ Q_NMSE` throughout (≈31× at convergence:
+  7.0e-3 vs 0.22).
 - **R2 — distributional, at the converged agent (step ≥ 200, "the trained
   agent"):** on the reachable set vs uniform, ratio of means over the region —
-  `WM_NMSE` **42× ± 10** smaller (2.2e-4 vs 7.0e-3; per-seed range 16–67×). So for
-  the trained agent the on-support bound is the operative one, as Theorem B2
-  predicts.
+  `WM_NMSE` **60× ± 7** smaller (1.3e-4 vs 7.0e-3). So for the trained agent the
+  on-support bound is the operative one, as Theorem B2 predicts.
 - **Recovery is tens-of-× better on `S_o` than uniform at every checkpoint**, even
   early ones where global Q_NMSE is ~1–2 — recovery on the visited region is
   robust even where `Q` is globally poor.
@@ -127,12 +126,12 @@ Headline signals are strong and support both reviewer points.
 The theorem's ε is `‖Q − Q^π‖` (Bellman residual, results.tex:7), NOT distance to
 optimal. The two metrics say complementary things and the strongest rebuttal uses
 both:
-- **`Q*`-error is 3.3× ± 0.4 larger off-support** (0.038 on vs 0.117 uniform) —
+- **`Q*`-error is 2.3× ± 0.2 larger off-support** (0.049 on vs 0.108 uniform) —
   Q *does* degrade off-distribution in the usual sense; this **concedes** the
   reviewer's premise.
-- **`Q^π`-error is ≈1.0× ± 0.1** (uniform, per-seed 0.8–1.4) — the error our bound
-  actually depends on is **not** concentrated off-support; the feared off-support
-  blow-up doesn't occur for the relevant metric.
+- **`Q^π`-error is ≈1.2× ± 0.2** (≈uniform) — the error our bound actually depends
+  on is **not** concentrated off-support; the feared off-support blow-up doesn't
+  occur for the relevant metric.
 - Do **not** present `Q*` alone as "on-support Q-error is smaller" — that swaps
   distance-to-optimal for approximation error and a theory reviewer will catch it.
 - **Mid-training (steps ~50–185) the on-support `Q^π`-error rises to ≈/above
@@ -152,23 +151,35 @@ perturbation into the `Q` the WM training sees (off `S_o`, or on `S_o` as the
 control), retrain, and measure on-support recovery vs the injected Q-error.
 (`scripts/q_perturb.py`; hook `q_value_fn` in `training/wm.py`.)
 
-**The key finding is two-sided and ties experiment to theory:**
-- **P-learning on the reduced MDP over `S_o` (WM trained with an on-support
-  sampler) is robust to off-support Q-error.** Injecting off-support error up to
-  `Q_NMSE ≈ 2.1` leaves on-support recovery flat (`1.0e-3 → 2.0e-3`); the *same*
-  error on-support degrades it ~20× (`→ 2.1e-2`). So recovery depends on
-  on-support `Q`-accuracy and is **immune to off-distribution Q-error** — the
-  direct answer to R2. (Mechanism: for on-support `(s,a)` the Bellman target
-  evaluates `Q` at successors in `S_o`, so off-support `Q` never enters.)
-- **Naive whole-space training is NOT robust:** with a uniform WM sampler,
-  off-support Q-error corrupts the global fit and *does* degrade on-support
-  recovery (~10× at scale 1). So the on-support restriction (the reduced MDP) is
-  not just a proof device — it is empirically **what confers the robustness**.
-  Report both; the contrast is the point.
+**Full-fidelity result (20000 WM steps): the experiment traces the B2→B3
+boundary.** On the reduced MDP over `S_o`, sweeping injected error magnitude:
+- **Robust regime (small–moderate off-support error, the reviewer's realistic
+  case).** At matched injected `Q_NMSE ≈ 0.1`, off-support perturbation leaves
+  on-support recovery essentially intact (`WM_NMSE ≈ 3e-5`) while the *same*
+  on-support error degrades it **~700×** (`≈ 2e-2`). Recovery is governed by
+  on-support Q-accuracy — the direct evidence for B2.
+- **Breakdown regime (large off-support error).** Once off-support `Q_NMSE ≳ 0.5`
+  (beyond the natural ~0.2), off-support error *also* breaks recovery
+  (`4e-2` at 0.53, up to `0.9` at 2.1): the WM, no longer confined to `S_o`,
+  finds a spurious consistent kernel off-support — **B3**. The off-support (blue)
+  curve stays ~flat then rises steeply, crossing the on-support (red) curve.
+- **Why the earlier smoke (200 steps) looked cleanly flat:** under-trained, the WM
+  couldn't exploit the spurious off-support minima. The full run reveals the
+  threshold — which is a *feature*: A3 empirically exhibits both the B2 guarantee
+  and the B3 limit.
+- **Caveat:** the injected perturbation is an adversarial (unstructured cos) field,
+  so it likely *overstates* off-support damage vs. a real Q-network's structured
+  extrapolation — the true robustness threshold is plausibly higher.
+- **Naive whole-space training shows the mirror pattern** (`q_perturb_uniform`):
+  robust to on-support error, *sensitive* to off-support error (degrades to ~0.34
+  at off-support `Q_NMSE 2`, flat under on-support error). Where you train decides
+  which error matters — reinforcing that the on-support restriction is what B2
+  buys.
 
-Numbers above are a CPU smoke (200 WM steps, 1 seed) — qualitatively unambiguous;
-refresh with the full-fidelity GPU run (`--wm_sample_region onsupport`, and a
-`uniform` run for the contrast).
+Honest framing for the response: lead with the **matched-magnitude contrast**
+(recovery ~700× more sensitive to on- than off-support error at realistic scale)
+and present the breakdown as the **B3 boundary**, not as "immune to any
+off-support error".
 
 ---
 
@@ -246,11 +257,11 @@ On-policy data concentrates on `S_o` and (with HER-style goal relabelling) tends
 to cover the reachable states across training goals, so the B.2 conditions
 approximately hold and Q-error is smallest on `S_o×𝒢` (A.2/A.5). This is why WM
 recovery is orders of magnitude better than the *uniform* Q-error would suggest
-(paper's `NMSE_WM=1.2e-4` vs `NMSE_Q=5.7e-1`). B.3 marks the boundary, and **A.7
-(A3) demonstrates it causally**: on the reduced MDP over `S_o`, on-support
-recovery is immune to injected off-support Q-error (flat out to `Q_NMSE≈2.1`) but
-degrades ~20× under on-support error — while naive whole-space training is *not*
-robust, confirming that the on-support restriction is what B.2 buys.
+(paper's `NMSE_WM=1.2e-4` vs `NMSE_Q=5.7e-1`). **A.7 (A3) demonstrates the
+B.2→B.3 boundary causally**: on the reduced MDP over `S_o`, on-support recovery is
+~700× more sensitive to on-support than off-support Q-error at realistic
+magnitudes (B.2), and off-support error breaks recovery only once it grows large
+enough to admit a spurious kernel (B.3).
 
 ### B.5 Numerical verification (`notes/theory_checks.py`, both PASS)
 - **B2:** on-support `ε_o=1e-3` → max recovery error `1.4e-4 ≤` bound `1.5e-3`.
