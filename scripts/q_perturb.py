@@ -61,8 +61,37 @@ def make_mask_sampler(mask_grid, state_ranges, R):
     return sample_fn
 
 
+def make_projection(mask_grid, state_ranges, R):
+    """Map any state to the centre of the nearest reachable-set ($S_o$) cell.
+
+    Confining every Q-query through this projection makes the WM's Bellman
+    bootstrap read Q only on $S_o$ — the practical analogue of the estimator
+    $M_{S_o}^{+}Q$ that Theorem B2 analyses. Off-support Q-error is then never
+    read, so recovery should be immune to it at any magnitude."""
+    from scipy.ndimage import distance_transform_edt
+    m = np.asarray(mask_grid) > 0                       # True in S_o
+    sd = m.ndim
+    # nearest in-S_o cell for every grid cell (edt on the complement)
+    _, idx = distance_transform_edt(~m, return_indices=True)   # idx: (sd,)+grid
+    axes = [np.linspace(lo, hi, R) for lo, hi in state_ranges]
+    centers = np.stack([axes[d][idx[d]] for d in range(sd)], axis=-1)  # grid + (sd,)
+    centers_flat = jnp.asarray(centers.reshape(-1, sd), dtype=jnp.float32)
+    los = jnp.array([lo for lo, _ in state_ranges])
+    his = jnp.array([hi for _, hi in state_ranges])
+
+    def proj(obs):
+        lin = jnp.zeros(obs.shape[0], dtype=jnp.int32)
+        for d in range(sd):
+            bi = jnp.clip(jnp.round((obs[:, d] - los[d]) / (his[d] - los[d]) * (R - 1)),
+                          0, R - 1).astype(jnp.int32)
+            lin = lin * R + bi
+        return centers_flat[lin]
+
+    return proj
+
+
 def make_perturbed_q_fn(pqn_config, q_vars, mask_grid, state_ranges, R,
-                        scale, region, qscale, key):
+                        scale, region, qscale, key, proj=None):
     """Deterministic, region-gated additive Q-perturbation.
 
     noise(s,a) = scale · qscale · cos(ŝ·W_a + b_a), a fixed smooth field (so the
@@ -88,10 +117,11 @@ def make_perturbed_q_fn(pqn_config, q_vars, mask_grid, state_ranges, R,
         return flat_ind[lin]
 
     def q_fn(obs, goal_repr):
-        q = network.apply(q_vars, obs, goal_repr, train=False)
-        obs_n = (obs - los) / (his - los)
+        o = proj(obs) if proj is not None else obs      # confine Q-query to S_o
+        q = network.apply(q_vars, o, goal_repr, train=False)
+        obs_n = (o - los) / (his - los)
         noise = jnp.cos(obs_n @ W + b)                  # [n, A]
-        ind = _onsupport(obs)
+        ind = _onsupport(o)
         gate = ind if region == "on" else (1.0 - ind)
         return q + scale * qscale * noise * gate[:, None]
 
@@ -124,6 +154,9 @@ def main():
                     default="onsupport",
                     help="train the WM on S_o (reduced MDP, Thm B2's regime; "
                          "default) or uniformly over the whole box (naive)")
+    ap.add_argument("--confine", action="store_true",
+                    help="project every Q-query onto S_o so the bootstrap never "
+                         "reads off-support Q (the M_{S_o}^+ estimator of Thm B2)")
     ap.add_argument("--wm_num_steps", type=int, default=None)
     ap.add_argument("--wm_batch_size", type=int, default=None)
     ap.add_argument("--out_dir", default=None)
@@ -196,18 +229,23 @@ def main():
                                  eval_states, adim, sdim, weights=eval_w)
         return float(on)
 
+    proj = make_projection(mask_grid, state_ranges, R) if args.confine else None
+    if args.confine:
+        print("Q-queries CONFINED to S_o (projection) — bootstrap never reads "
+              "off-support Q", flush=True)
+
     rows = []
     base_key = jax.random.PRNGKey(3)
     for region in regions:
         for scale in scales:
-            if scale == 0.0:
+            if scale == 0.0 and proj is None:
                 qfn, WB = None, (None, None)
                 inj = 0.0
             else:
                 qfn, WB = make_perturbed_q_fn(P, q_vars, mask_grid, state_ranges, R,
-                                              scale, region, qscale, base_key)
-                inj = injected_qnmse(P, q_vars, WB[0], WB[1], mask_grid, state_ranges,
-                                     R, scale, qscale, region, goals)
+                                              scale, region, qscale, base_key, proj=proj)
+                inj = (injected_qnmse(P, q_vars, WB[0], WB[1], mask_grid, state_ranges,
+                                      R, scale, qscale, region, goals) if scale > 0 else 0.0)
             on = train_and_score(qfn)
             rows.append({"region": region, "scale": scale, "inj_qnmse": inj,
                          "wm_nmse_onsupport": on})
@@ -229,7 +267,8 @@ def main():
     ax.set_ylabel(r"on-support recovery  $\mathrm{WM}_{\mathrm{NMSE}}$")
     ax.set_yscale("log")
     _regime = r"reduced MDP on $S_o$" if args.wm_sample_region == "onsupport" else "whole state space"
-    ax.set_title(f"On-support recovery vs injected Q-error\n(P-learning on the {_regime})")
+    _conf = r", Q confined to $S_o$" if args.confine else ""
+    ax.set_title(f"On-support recovery vs injected Q-error\n(P-learning on the {_regime}{_conf})")
     ax.legend(fontsize=8)
     fig.tight_layout(); fig.savefig(f"{out_dir}/q_perturb.png"); plt.close(fig)
     unset_paper_style()
