@@ -27,52 +27,76 @@ uv sync --extra cuda               # installs Python 3.12 if needed + jax[cuda12
 ```
 
 ## 3. Verify the GPU is visible to JAX
+Many RunPod images ship a **system CUDA 13** whose `LD_LIBRARY_PATH` collides with
+JAX's bundled CUDA-12 wheels (symptom: `cuSPARSE library was not found`, falls
+back to CPU). Drop the system path first:
 ```bash
+unset LD_LIBRARY_PATH                              # do this in every fresh shell
 uv run python -c "import jax; print(jax.devices())"
 # expect: [CudaDevice(id=0)]   (not CpuDevice)
 ```
+(Optional: `echo 'unset LD_LIBRARY_PATH' >> ~/.bashrc` so new shells inherit it.)
 
 ## 4. Regenerate PQN checkpoints (the Q-quality axis)
 ```bash
 # 5 seeds, PQN only, saving the 20 intermediate step_*.pkl per seed
 uv run python run.py --config configs/mountaincar-position.py \
     --seeds 0,1,2,3,4 --phases pqn --save_pqn_checkpoints
-# note the printed "Sweep dir: outputs/mountaincar-position/seeds_<TIMESTAMP>"
-export SWEEP=outputs/mountaincar-position/seeds_<TIMESTAMP>
+# grab the sweep dir it just created (latest seeds_* dir)
+export SWEEP=$(ls -td outputs/mountaincar-position/seeds_* | head -1)
+echo "SWEEP=$SWEEP"
+ls $SWEEP/seed_0/checkpoints/        # sanity: 21 step_*.pkl files
 ```
-(1 seed is enough for a first look — the scaling curve already has ~20 points
-from one run. Use `--seeds 0` for a quick pass.)
+(1 seed suffices for a first look — one run already gives ~20 scaling points.
+Use `--seeds 0` for a quick pass.)
 
 ## 5. Run the experiments (full fidelity — defaults are GPU-appropriate)
-```bash
-# A1 — recovery vs Q-error (trains a 20000-step WM per checkpoint; ~10 s/ckpt GPU)
-uv run python scripts/recovery_vs_qerror.py \
-    --config configs/mountaincar-position.py \
-    --run_dirs $SWEEP/seed_0 $SWEEP/seed_1 $SWEEP/seed_2 $SWEEP/seed_3 $SWEEP/seed_4
-# each checkpoint is weighted by its OWN policy visitation (default);
-# add --visitation_from final to weight all by the converged agent instead.
-
-# A2 — distributional vs uniform (reuses A1's per-seed tracking npz)
-uv run python scripts/dist_vs_uniform.py \
-    --config configs/mountaincar-position.py \
-    --run_dirs $SWEEP/seed_0 $SWEEP/seed_1 $SWEEP/seed_2 $SWEEP/seed_3 $SWEEP/seed_4 --reuse
-```
-On GPU do NOT pass `--wm_num_steps` / `--wm_batch_size` — the defaults (20000
+Do NOT pass `--wm_num_steps` / `--wm_batch_size` on GPU — the defaults (20000
 steps, batch 4096) are the paper-grade setting and are cheap on GPU.
+```bash
+SEEDS="$SWEEP/seed_0 $SWEEP/seed_1 $SWEEP/seed_2 $SWEEP/seed_3 $SWEEP/seed_4"
 
-Rough GPU budget (5 seeds): PQN ~5 min; recovery ~20 ckpts × 5 seeds × ~10 s WM
-≈ 20–30 min. Well under an hour total.
+# A1 — recovery vs Q-error (trains a 20000-step WM per checkpoint; ~10 s/ckpt GPU).
+# Each checkpoint is weighted by its OWN policy visitation, on-support = reachable
+# set S_o (mask); both are defaults.
+uv run python scripts/recovery_vs_qerror.py \
+    --config configs/mountaincar-position.py --run_dirs $SEEDS
 
-## 6. Outputs
+# A2 — distributional (on-support) vs uniform (reuses A1's per-seed npz).
+uv run python scripts/dist_vs_uniform.py \
+    --config configs/mountaincar-position.py --run_dirs $SEEDS --reuse
+
+# A3 — controlled off-support Q-perturbation (robustness to off-distribution Q).
+#   main: P-learning on the reduced MDP over S_o (the robust regime)
+uv run python scripts/q_perturb.py --config configs/mountaincar-position.py \
+    --run_dir $SWEEP/seed_0 --wm_sample_region onsupport --scales 0,0.25,0.5,1,2
+#   contrast: naive whole-space training (NOT robust — shows the restriction matters)
+uv run python scripts/q_perturb.py --config configs/mountaincar-position.py \
+    --run_dir $SWEEP/seed_0 --wm_sample_region uniform --scales 0,0.25,0.5,1,2 \
+    --out_dir outputs/mountaincar/q_perturb_uniform
+
+# (theory sanity check — CPU, instant, no GPU needed)
+uv run python notes/theory_checks.py
 ```
-$SWEEP/seed_*/recovery_track/recovery_tracking.npz   # per-seed raw metrics
+Rough GPU budget (5 seeds): PQN ~5 min; A1 ~20–30 min; A2 seconds; A3 ~3 min.
+Under an hour total.
+
+## 6. Outputs — retrieve these
+```
+$SWEEP/seed_*/recovery_track/recovery_tracking.npz            # per-seed raw metrics
 outputs/mountaincar/recovery_vs_qerror/{scatter.png, curves_vs_step.png, metrics.npz}   # A1
-outputs/mountaincar/dist_vs_uniform/{qerr_uniform_vs_visit.png, recovery_tracks_visit.png, dist.npz}  # A2
+outputs/mountaincar/dist_vs_uniform/{onoff_summary.png, dist.npz}                        # A2
+outputs/mountaincar/q_perturb/{q_perturb.png, q_perturb.npz}                             # A3 (on-support)
+outputs/mountaincar/q_perturb_uniform/{q_perturb.png, q_perturb.npz}                     # A3 (contrast)
 ```
-Retrieve via the RunPod file browser, `runpodctl send`, `scp`, or commit them to
-a results branch. Sanity checks: Spearman ρ(WM_NMSE, Q_NMSE) < 0 (A1);
-`WM_NMSE_visit < WM_NMSE_uniform`, and `WM_NMSE_visit` roughly flat while
-`WM_NMSE_uniform` falls as `visit_frac` rises (A2 — the broadening-support story).
+Tar + fetch, e.g.:
+```bash
+tar czf results.tgz outputs/mountaincar $SWEEP/seed_*/recovery_track
+# then: runpodctl send results.tgz   (or the RunPod file browser / scp)
+```
+Sanity checks: A1 Spearman ρ(Q_NMSE, WM_NMSE) > 0 (~0.85); A2 `WM_NMSE` on `S_o`
+≪ uniform, Q\* smaller on-support while Q^π ~equal; A3 on-support run: off-support
+curve flat, on-support curve rises ~20×.
 
 ## Reacher (optional, now feasible on GPU)
 Same flow with `--config configs/reacher.py`. Reacher's value iteration runs on a
@@ -85,5 +109,7 @@ FK lifts.
   `--save_pqn_checkpoints`; each writes `$SWEEP/seed_S/checkpoints/step_*.pkl`.
 - The final `step_*.pkl` duplicates `pqn_checkpoint.pkl`; the tracker drops it, so
   you get exactly the 20 eval-point checkpoints.
-- If JAX raises a cuDNN/driver mismatch, `uv pip install -U "jax[cuda12]"` inside
-  the venv usually resolves it against the pod's driver.
+- **`cuSPARSE library was not found` / falls back to CPU** → stale system-CUDA
+  `LD_LIBRARY_PATH`; `unset LD_LIBRARY_PATH` (step 3). If it persists, force the
+  bundled wheels: `uv pip install --reinstall "jax[cuda12]==0.9.2"`.
+- A3 `--run_dir` must point at a single seed dir containing `pqn_checkpoint.pkl`.
