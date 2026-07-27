@@ -183,14 +183,17 @@ successor* `s'=WM(s,a)`. The Bellman loss bootstraps through `max Q(s',·)`, and
 successor that leaves `S_o`. The theorem's estimator `M_{S_o}⁺Q` reads Q only on
 `S_o` columns *by construction* — the WM is an *unconfined* approximation of it.
 
-**`--confine` (project every Q-query onto `S_o`) confirms this exactly.** Then the
-bootstrap never reads off-support Q, and off-support perturbation produces
-*byte-identical* WM training (same loss trajectory and `WM_NMSE` at scales 0, 1,
-2) — recovery is immune at **any** magnitude, while on-support perturbation still
-degrades it. This is the definitive B2 confirmation: the estimator the theorem
-analyses is exactly immune to off-support Q-error; the unconfined WM inherits the
-robustness only until off-support error grows large enough to lure its successors
-off `S_o` (B3).
+**`--confine` (project off-support Q-queries onto `S_o`) confirms this exactly
+(full GPU run).** The bootstrap then never reads off-support Q, and off-support
+perturbation has **zero** effect: on-support `WM_NMSE ≈ 4.3e-6` is *identical* for
+injected off-support error `0 → NMSE 2.1` (a dead-flat line); on-support
+perturbation degrades it monotonically (`4e-3 → 4e-2 → 0.16 → 0.22`). The
+**realistic-range** unconfined run (injected `NMSE ≤ 0.02`) shows the same
+contrast even without confinement: off-support flat (`~1e-5`), on-support rising
+(`→ 3.7e-3`, ~100×). This is the definitive B2 confirmation: the estimator the
+theorem analyses is exactly immune to off-support Q-error; the unconfined WM
+inherits the robustness at realistic error and breaks only when off-support error
+grows large enough to lure its successors off `S_o` (B3).
 
 Honest framing for the response: the **confined estimator** (`M_{S_o}⁺Q`, i.e.
 `--confine`) is provably and empirically immune to off-support Q-error at any
@@ -218,19 +221,34 @@ The key realization (no new axiom needed): the policy-reachable set is
 **forward-invariant by construction**, so restricting to it is a genuine reduced
 MDP and the paper's theorem applies verbatim with `ε`, `M` restricted.
 
-**Reachable set.** From initial distribution `ρ`, `Reach(π_g)` = states with
-positive occupancy under `π_g`. Define `S_o = ⋃_{g∈𝒢} Reach(π_g)`. For
-`s∈Reach(π_g)` and `a=π_g(s)`, `supp P(s,a) ⊆ Reach(π_g) ⊆ S_o`.
+**Reachable set + on-policy actions.** `Reach(π_g)` = states with positive
+occupancy under `π_g` from `ρ`; `S_o = ⋃_{g∈𝒢} Reach(π_g)`;
+`A_o(s) = {π_g(s) : g∈𝒢}` = the actions the policies take at `s` (state-dependent).
+The reduced MDP is over the **pairs** `{(s,a) : s∈S_o, a∈A_o(s)}`, which is
+forward-invariant: `supp P(s,π_g(s)) ⊆ Reach(π_g) ⊆ S_o`, and every `S_o`
+successor has `A_o`-actions available. **`S_o×𝒜` is NOT forward-invariant** — an
+off-policy `a∉A_o(s)` can send `P(s,a)` off `S_o`, which is exactly why `A_o` is
+needed (maximal valid action set: any `a` with `supp P(s,a)⊆S_o`, which contains
+`A_o(s)`). Caveat: this guarantees the *visited* dynamics; recovering `P(s,a)` for
+counterfactual actions needs their successors covered too.
 
-**On-support error.** `‖Q(s,a,·)−Q^π(s,a,·)‖₁ ≤ ε_o` for all `s∈S_o, a∈𝒜`, over
-**all goals** (i.e. over `S_o×𝒜×𝒢`). No constraint off `S_o`.
+**On-support error.** `ε_o = sup{ ‖Q(s,a,·)−Q^π(s,a,·)‖₁ : s∈S_o, a∈A_o(s) }`,
+over **all goals**. (Tighter than `S_o×𝒜`: `M_{S_o}`'s columns only need
+`V^{π_{g'}}(s_k,g')=Q(s_k,π_{g'}(s_k),g')` — on-support states, on-policy actions.)
+No constraint off `S_o`.
 
 **Theorem (reduced-MDP recovery).** Let `M_{S_o}∈ℝ^{L×|S_o|}` be `M` restricted to
-`S_o`-columns, full column rank. Then `P̂(s,a)=M_{S_o}⁺Q(s,a)` (a distribution on
-`S_o`) satisfies, for every `s∈S_o, a`:
+`S_o`-columns, full column rank. Then for every `(s,a)` with `s∈S_o, a∈A_o(s)`,
+`P̂(s,a)=M_{S_o}⁺Q(s,a)` (a distribution on `S_o`) satisfies
 `‖P̂(s,a)−P(s,a)‖₁ ≤ ‖M_{S_o}⁺‖₁ (1+γm) ε_o`.
 Deterministic case: column-matching over `S_o` recovers `P(s,a)` exactly whenever
 `ε_o < gap(M_{S_o})/(2(1+γm))`.
+
+**Scope.** These are **finite-MDP** results (the paper's approximate bounds are
+finite; the continuous results are exact-identifiability only). MountainCar is
+deterministic + continuous, so the **deterministic** bound is the apt one; we
+verify it numerically on a finite MDP (`theory_checks.py`) and use MountainCar to
+illustrate the phenomenon. Continuous approximate bounds are future work.
 
 **Proof sketch.** Since `supp P(s,a)⊆S_o`, `P(s,a)` is a vector on `S_o` and
 `M_{S_o}P(s,a)=Q^π(s,a)`. The estimated `M̂_{S_o}=M_{S_o}+E_{S_o}` has column
