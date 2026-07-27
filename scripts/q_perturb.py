@@ -117,7 +117,15 @@ def make_perturbed_q_fn(pqn_config, q_vars, mask_grid, state_ranges, R,
         return flat_ind[lin]
 
     def q_fn(obs, goal_repr):
-        o = proj(obs) if proj is not None else obs      # confine Q-query to S_o
+        if proj is not None:
+            # Confine to S_o by projecting ONLY off-support queries onto the
+            # nearest S_o cell; on-support queries keep full precision (else the
+            # bootstrap becomes a coarse staircase and recovery floors at grid
+            # resolution). Off-support Q is thus never read; on-support Q is exact.
+            on = _onsupport(obs)                        # decide on original obs
+            o = jnp.where(on[:, None] > 0.5, obs, proj(obs))
+        else:
+            o = obs
         q = network.apply(q_vars, o, goal_repr, train=False)
         obs_n = (o - los) / (his - los)
         noise = jnp.cos(obs_n @ W + b)                  # [n, A]
