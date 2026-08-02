@@ -18,13 +18,39 @@ source $HOME/.local/bin/env        # or restart the shell
 ```
 
 ## 2. Clone + install
+The repo is private and the remote is SSH. The deploy key lives on the
+persistent volume at `/workspace/.secrets/ssh/github_ed25519`; restore it into
+the (ephemeral) home dir first — see §2a if this is a migrated pod.
 ```bash
-# private repo → use a GitHub token (or set up an SSH deploy key)
-git clone https://<GITHUB_TOKEN>@github.com/aletcher/inverting-bellman.git
+bash /workspace/.secrets/bootstrap-ssh.sh    # ssh key + git identity
+git clone git@github.com:aletcher/inverting-bellman.git
 cd inverting-bellman
 git checkout rebuttal-recovery-vs-qerror
 uv sync --extra cuda               # installs Python 3.12 if needed + jax[cuda12]
 ```
+
+## 2a. After a pod migration
+Migrations wipe `/` but keep `/workspace`, so the clone, the venv and the
+`outputs/` survive — only the home dir is gone. One command brings it back:
+```bash
+bash /workspace/.secrets/bootstrap-ssh.sh
+```
+This copies the key to `~/.ssh/github_ed25519` (mode 600), writes a
+`Host github.com` block pinning it, and restores `~/.gitconfig`. It ends by
+running `ssh -T git@github.com`, which should greet you by username.
+
+The copy step is not optional: `/workspace` is a MooseFS/FUSE mount that
+ignores `chmod` and reports every file as `0777`, so ssh refuses to read a key
+straight off the volume ("permissions are too open"). Only the copy on
+overlayfs can hold mode 600. For the same reason the at-rest key is
+world-readable in mode terms — it is a repo-scoped deploy key rather than an
+account key to limit that. Add a passphrase any time with
+`ssh-keygen -p -f /workspace/.secrets/ssh/github_ed25519` (then `ssh-add` it
+once per pod).
+
+To register a replacement key: generate with
+`ssh-keygen -t ed25519 -f /workspace/.secrets/ssh/github_ed25519`, then add the
+`.pub` under repo Settings → Deploy keys, with write access.
 
 ## 3. Verify the GPU is visible to JAX
 Many RunPod images ship a **system CUDA 13** whose `LD_LIBRARY_PATH` collides with
@@ -113,3 +139,5 @@ FK lifts.
   `LD_LIBRARY_PATH`; `unset LD_LIBRARY_PATH` (step 3). If it persists, force the
   bundled wheels: `uv pip install --reinstall "jax[cuda12]==0.9.2"`.
 - A3 `--run_dir` must point at a single seed dir containing `pqn_checkpoint.pkl`.
+- **`git@github.com: Permission denied (publickey)`** after a migration → you
+  skipped §2a; run `bash /workspace/.secrets/bootstrap-ssh.sh`.
