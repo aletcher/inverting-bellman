@@ -163,6 +163,24 @@ WM_CONFIG = {
     "EVAL_HEATMAP_RES": 80,
 }
 
+# ── Policy-only world model (pi-learning) ─────────────────────────────────────
+# Extract the WM from Boltzmann policies pi_g = softmax(Q/tau) alone (no Q
+# magnitudes), jointly learning a per-goal value net V_psi. Same WM
+# architecture as WM_CONFIG for apples-to-apples NMSE; more steps because
+# V_psi is learned from scratch.
+
+PIWM_CONFIG = {
+    **WM_CONFIG,
+    "NUM_STEPS": 20_000,
+    "TAU": 0.03,
+    "CONSISTENCY": "soft",  # "soft" (Boltzmann/soft-Bellman) or "hard" (advantage)
+    "V_DENSE_HIDDEN_SIZE": 512,
+    "V_DENSE_LAYERS": 3,
+    "V_SIGMOID_OUTPUT": False,
+    "V_LR": None,  # None = share LR with the WM
+    "V_STOP_GRAD": False,  # semi-gradient bootstrap (stability fallback)
+}
+
 # ── Value iteration — 4D effective state (theta1, theta2, omega1, omega2) ────
 # Reacher's 6D raw obs is a deterministic function of the 4D underlying state,
 # so VI on the 4D grid recovers Q* on the full obs.
