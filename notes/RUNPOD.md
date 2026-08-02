@@ -1,8 +1,13 @@
-# Running the recovery-vs-Q-error experiments on a RunPod GPU
+# Running on a RunPod GPU
 
-Branch: `rebuttal-recovery-vs-qerror`. The PQN checkpoints live in `outputs/`
-(gitignored), so they do NOT come with the clone — you regenerate them on the
-pod (PQN training is ~1 min/seed for MountainCar on GPU).
+Sections 0–3 (pod, tools, SSH-across-migrations, GPU) are branch-independent —
+start there whatever you are running. Section 4 onward is `boltzmann`
+(pi-learning); the recovery-vs-Q-error recipe lives on the copy of this file on
+`rebuttal-recovery-vs-qerror`, whose scripts do not exist on this branch.
+
+PQN checkpoints live in `outputs/` (gitignored), so they do NOT come with the
+clone — you regenerate them on the pod (~1 min/seed for MountainCar on GPU).
+They do survive pod migrations, since `/workspace` is persistent.
 
 ## 0. Pod
 Any CUDA-12-capable GPU pod works (e.g. RunPod "PyTorch 2.x" template, or a plain
@@ -53,76 +58,78 @@ To register a replacement key: generate with
 `.pub` under repo Settings → Deploy keys, with write access.
 
 ## 3. Verify the GPU is visible to JAX
-Many RunPod images ship a **system CUDA 13** whose `LD_LIBRARY_PATH` collides with
-JAX's bundled CUDA-12 wheels (symptom: `cuSPARSE library was not found`, falls
-back to CPU). Drop the system path first:
+Many RunPod images ship a **system CUDA 13** and bake
+`LD_LIBRARY_PATH=/usr/local/cuda/lib64` into the container env (not into any
+profile script, so it reaches every process), where it shadows the CUDA-12 libs
+in JAX's own wheels. Symptom: `cuSPARSE library was not found`, then a *silent*
+fall back to CPU. Drop the system path:
 ```bash
-unset LD_LIBRARY_PATH                              # do this in every fresh shell
+unset LD_LIBRARY_PATH
 uv run python -c "import jax; print(jax.devices())"
 # expect: [CudaDevice(id=0)]   (not CpuDevice)
 ```
-(Optional: `echo 'unset LD_LIBRARY_PATH' >> ~/.bashrc` so new shells inherit it.)
+`bootstrap-ssh.sh` (§2a) appends that `unset` to `~/.bashrc`, so on a
+bootstrapped pod every *interactive* shell already has it.
 
-## 4. Regenerate PQN checkpoints (the Q-quality axis)
+**Non-interactive shells do not read `~/.bashrc`.** A batch job launched as
+`nohup bash something.sh &` still inherits the bad path and trains on CPU, with
+nothing but one `cuSPARSE` line in the log to say so. Either `unset` at the top
+of the script, or launch with:
 ```bash
-# 5 seeds, PQN only, saving the 20 intermediate step_*.pkl per seed
-uv run python run.py --config configs/mountaincar-position.py \
-    --seeds 0,1,2,3,4 --phases pqn --save_pqn_checkpoints
-# grab the sweep dir it just created (latest seeds_* dir)
+env -u LD_LIBRARY_PATH uv run python run.py ...
+```
+Cheap guard for a long job — assert the device up front rather than finding out
+hours later:
+```bash
+uv run python -c "import jax,sys; sys.exit(0 if jax.devices()[0].platform=='gpu' else 1)" \
+  || { echo "NOT ON GPU"; exit 1; }
+```
+Harmless: `E... xtile_compiler ... gemm_fusion` lines are Triton autotuning
+noise on newer cards (e.g. Blackwell RTX PRO 6000). XLA falls back to another
+kernel and the numerics are unaffected.
+
+## 4. PQN checkpoints (the Q you extract from)
+`outputs/` is on the persistent volume, so checkpoints from an earlier pod are
+still there and usually need no retraining — look before you burn GPU time:
+```bash
+ls outputs/*/seeds*/seed_*/pqn_checkpoint.pkl
+```
+To (re)train:
+```bash
+uv run python run.py --config configs/mountaincar-position.py --phases pqn --seeds 0
 export SWEEP=$(ls -td outputs/mountaincar-position/seeds_* | head -1)
-echo "SWEEP=$SWEEP"
-ls $SWEEP/seed_0/checkpoints/        # sanity: 21 step_*.pkl files
 ```
-(1 seed suffices for a first look — one run already gives ~20 scaling points.
-Use `--seeds 0` for a quick pass.)
+`--save_pqn_checkpoints` additionally writes the intermediate `step_*.pkl`; it
+is off by default and only the architecture sweep needs it (~1.7 GB per Reacher
+seed, so leave it off unless you do).
 
-## 5. Run the experiments (full fidelity — defaults are GPU-appropriate)
-Do NOT pass `--wm_num_steps` / `--wm_batch_size` on GPU — the defaults (20000
-steps, batch 4096) are the paper-grade setting and are cheap on GPU.
+## 5. Pi-learning — policy-only WM extraction (this branch)
+`scripts/policy_wm.py` extracts a world model from a PQN checkpoint using only
+the policy, under a Boltzmann-rationality assumption at temperature `--tau`:
 ```bash
-SEEDS="$SWEEP/seed_0 $SWEEP/seed_1 $SWEEP/seed_2 $SWEEP/seed_3 $SWEEP/seed_4"
-
-# A1 — recovery vs Q-error (trains a 20000-step WM per checkpoint; ~10 s/ckpt GPU).
-# Each checkpoint is weighted by its OWN policy visitation, on-support = reachable
-# set S_o (mask); both are defaults.
-uv run python scripts/recovery_vs_qerror.py \
-    --config configs/mountaincar-position.py --run_dirs $SEEDS
-
-# A2 — distributional (on-support) vs uniform (reuses A1's per-seed npz).
-uv run python scripts/dist_vs_uniform.py \
-    --config configs/mountaincar-position.py --run_dirs $SEEDS --reuse
-
-# A3 — controlled off-support Q-perturbation (robustness to off-distribution Q).
-#   main: P-learning on the reduced MDP over S_o (the robust regime)
-uv run python scripts/q_perturb.py --config configs/mountaincar-position.py \
-    --run_dir $SWEEP/seed_0 --wm_sample_region onsupport --scales 0,0.25,0.5,1,2
-#   contrast: naive whole-space training (NOT robust — shows the restriction matters)
-uv run python scripts/q_perturb.py --config configs/mountaincar-position.py \
-    --run_dir $SWEEP/seed_0 --wm_sample_region uniform --scales 0,0.25,0.5,1,2 \
-    --out_dir outputs/mountaincar/q_perturb_uniform
-
-# (theory sanity check — CPU, instant, no GPU needed)
-uv run python notes/theory_checks.py
+uv run python scripts/policy_wm.py \
+    --config configs/mountaincar-position.py \
+    --pqn_checkpoint $SWEEP/seed_0
 ```
-Rough GPU budget (5 seeds): PQN ~5 min; A1 ~20–30 min; A2 seconds; A3 ~3 min.
-Under an hour total.
+Defaults come from `PIWM_CONFIG` in the config, and are GPU-appropriate — pass
+`--num_steps` / `--batch_size` only to cut a run short for a smoke test.
+Results land in `<checkpoint_dir>/piwm_<timestamp>/` unless `--out_dir` is set.
 
-## 6. Outputs — retrieve these
-```
-$SWEEP/seed_*/recovery_track/recovery_tracking.npz            # per-seed raw metrics
-outputs/mountaincar/recovery_vs_qerror/{scatter.png, curves_vs_step.png, metrics.npz}   # A1
-outputs/mountaincar/dist_vs_uniform/{onoff_summary.png, dist.npz}                        # A2
-outputs/mountaincar/q_perturb/{q_perturb.png, q_perturb.npz}                             # A3 (on-support)
-outputs/mountaincar/q_perturb_uniform/{q_perturb.png, q_perturb.npz}                     # A3 (contrast)
-```
-Tar + fetch, e.g.:
+Knobs that change the method rather than the budget: `--consistency {soft,hard}`
+(normalisation of log π), `--v_stop_grad` (semi-gradient bootstrap, freezing
+V_ψ in the target), and `--wm_loss {l1,mse}`.
+
+The full pipeline (value iteration, the standard WM baseline, unseen-task
+eval) runs through `run.py --phases`, which accepts
+`pqn,plot_pqn,vi,wm,plot_wm,unseen`.
+
+## 6. Retrieving results
+Everything under `outputs/` persists across migrations, so you only need this to
+get artefacts off the pod:
 ```bash
-tar czf results.tgz outputs/mountaincar $SWEEP/seed_*/recovery_track
+tar czf results.tgz outputs/<env>/...
 # then: runpodctl send results.tgz   (or the RunPod file browser / scp)
 ```
-Sanity checks: A1 Spearman ρ(Q_NMSE, WM_NMSE) > 0 (~0.85); A2 `WM_NMSE` on `S_o`
-≪ uniform, Q\* smaller on-support while Q^π ~equal; A3 on-support run: off-support
-curve flat, on-support curve rises ~20×.
 
 ## Reacher (optional, now feasible on GPU)
 Same flow with `--config configs/reacher.py`. Reacher's value iteration runs on a
@@ -133,11 +140,11 @@ FK lifts.
 ## Notes / gotchas
 - `run.py --seeds` spawns one subprocess per seed and forwards
   `--save_pqn_checkpoints`; each writes `$SWEEP/seed_S/checkpoints/step_*.pkl`.
-- The final `step_*.pkl` duplicates `pqn_checkpoint.pkl`; the tracker drops it, so
-  you get exactly the 20 eval-point checkpoints.
+- The final `step_*.pkl` duplicates `pqn_checkpoint.pkl`.
 - **`cuSPARSE library was not found` / falls back to CPU** → stale system-CUDA
-  `LD_LIBRARY_PATH`; `unset LD_LIBRARY_PATH` (step 3). If it persists, force the
+  `LD_LIBRARY_PATH`; `unset LD_LIBRARY_PATH` (§3). If it persists, force the
   bundled wheels: `uv pip install --reinstall "jax[cuda12]==0.9.2"`.
-- A3 `--run_dir` must point at a single seed dir containing `pqn_checkpoint.pkl`.
+- `--pqn_checkpoint` takes a single seed dir containing `pqn_checkpoint.pkl`
+  (or the `.pkl` itself), not a sweep dir.
 - **`git@github.com: Permission denied (publickey)`** after a migration → you
   skipped §2a; run `bash /workspace/.secrets/bootstrap-ssh.sh`.
