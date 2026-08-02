@@ -53,6 +53,13 @@ def main():
     parser.add_argument("--wm_loss", type=str, default=None, choices=["l1", "mse"])
     parser.add_argument("--seed", type=int, default=None,
                         help="PiWM training seed (default: PIWM_CONFIG['SEED']).")
+    parser.add_argument("--num_extraction_goals", type=int, default=None,
+                        help="Query the policy at this many fingertip goals tiling the "
+                             "reachable disk (sunflower layout) instead of the agent's "
+                             "training goals. Denser reward coverage removes the flat-V "
+                             "degeneracy of the joint (V, WM) fit.")
+    parser.add_argument("--extraction_goal_radius", type=float, default=1.5,
+                        help="Max fingertip radius of the extraction-goal disk.")
     parser.add_argument("--out_dir", type=str, default=None,
                         help="Output dir (default: <checkpoint_dir>/piwm_<TS>).")
     args = parser.parse_args()
@@ -68,6 +75,25 @@ def main():
     goals = PQN_CONFIG["GOALS"]
     goal_masks = PQN_CONFIG["REWARD_MASK"]
     assert ENV_CONFIG["ENV_NAME"] == "Reacher", "policy_wm.py currently supports Reacher only."
+
+    # Extraction-time goal densification: the policy is queryable at any
+    # continuous fingertip target (the Q-net conditions on goal dims [4,5]
+    # only), so tile the reachable disk with a sunflower layout. The agent's
+    # 4 training goals are irrelevant here — what matters is that the union
+    # of reward balls anchors r_g(s') over most of the state space.
+    if args.num_extraction_goals is not None:
+        import numpy as _np
+        import jax.numpy as jnp
+        n_g = args.num_extraction_goals
+        idx = _np.arange(n_g)
+        radii = args.extraction_goal_radius * _np.sqrt((idx + 0.5) / n_g)
+        angles = idx * _np.pi * (3.0 - _np.sqrt(5.0))  # golden angle
+        fp = _np.stack([radii * _np.cos(angles), radii * _np.sin(angles)], axis=-1)
+        state_dim = PQN_CONFIG["STATE_DIM"]
+        goals = jnp.zeros((n_g, state_dim)).at[:, 4:6].set(jnp.array(fp))
+        goal_masks = jnp.zeros((n_g, state_dim)).at[:, 4:6].set(1.0)
+        print(f"[PiWM] extraction goals: {n_g} fingertip targets "
+              f"(sunflower, r <= {args.extraction_goal_radius})")
 
     # CLI overrides.
     _overrides = {
@@ -187,8 +213,11 @@ def main():
     for i in range(len(goals)):
         m = diag[i]
         line = f"  goal {i}: V_NMSE={m['v_nmse']:.1e}  Qhat_NMSE={m['q_nmse']:.1e}"
-        print(line)
+        if len(goals) <= 8 or i < 4:
+            print(line)
         lines.append(line + "\n")
+    if len(goals) > 8:
+        print(f"  ... ({len(goals) - 4} more goals in results.txt)")
     avg = diag["avg"]
     line = f"  avg:    V_NMSE={avg['v_nmse']:.1e}  Qhat_NMSE={avg['q_nmse']:.1e}"
     print(line)
