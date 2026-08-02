@@ -624,7 +624,7 @@ def main():
                 saved_config = json.load(f)
             for k in ("GOAL_INPUT_DIMS", "OBS_INPUT_DIMS", "NETWORK_DENSE_HIDDEN_SIZE",
                        "NETWORK_DENSE_LAYERS", "NORM_TYPE",
-                       "NETWORK_SIGMOID_OUTPUTS"):
+                       "NETWORK_SIGMOID_OUTPUTS", "NETWORK_SIGMOID_SCALE"):
                 if k in saved_config:
                     PQN_CONFIG[k] = saved_config[k]
                 elif k in PQN_CONFIG and k not in saved_config:

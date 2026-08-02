@@ -25,6 +25,7 @@ def make_q_network(pqn_config):
         dense_layers=pqn_config["NETWORK_DENSE_LAYERS"],
         norm_type=pqn_config["NORM_TYPE"],
         sigmoid_output=pqn_config["NETWORK_SIGMOID_OUTPUTS"],
+        sigmoid_scale=pqn_config.get("NETWORK_SIGMOID_SCALE", 1.0),
         goal_input_dims=tuple(pqn_config["GOAL_INPUT_DIMS"]) if pqn_config.get("GOAL_INPUT_DIMS") else None,
         obs_input_dims=tuple(pqn_config["OBS_INPUT_DIMS"]) if pqn_config.get("OBS_INPUT_DIMS") else None,
     )

@@ -57,6 +57,7 @@ class QNetwork(nn.Module):
 
     norm_type: str = "layer_norm"
     sigmoid_output: bool = False
+    sigmoid_scale: float = 1.0
     goal_input_dims: tuple = None  # None = all dims; e.g. (0,) = only first dim of goal
     obs_input_dims: tuple = None  # None = all dims; e.g. (0,1,2,3) = drop obs dims 4+
 
@@ -93,7 +94,10 @@ class QNetwork(nn.Module):
         )(embedding)
 
         if self.sigmoid_output:
-            qs = jax.nn.sigmoid(qs)
+            # The bound is load-bearing: without it the max/logsumexp bootstrap
+            # diverges (no target network). scale > 1 gives soft-trained agents
+            # headroom for entropy-inflated values above 1.
+            qs = self.sigmoid_scale * jax.nn.sigmoid(qs)
 
         return qs
 
