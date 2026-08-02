@@ -50,6 +50,9 @@ def main():
     parser.add_argument("--v_layers", type=int, default=None)
     parser.add_argument("--v_stop_grad", action="store_true",
                         help="Semi-gradient bootstrap (freeze V_psi params in target).")
+    parser.add_argument("--v_sigmoid", action="store_true",
+                        help="Bound V_psi in (0,1) via sigmoid. Kills the runaway-V "
+                             "degeneracy; exact for hard consistency (V = max Q).")
     parser.add_argument("--wm_loss", type=str, default=None, choices=["l1", "mse"])
     parser.add_argument("--seed", type=int, default=None,
                         help="PiWM training seed (default: PIWM_CONFIG['SEED']).")
@@ -108,6 +111,8 @@ def main():
             piwm_config[k] = v
     if args.v_stop_grad:
         piwm_config["V_STOP_GRAD"] = True
+    if args.v_sigmoid:
+        piwm_config["V_SIGMOID_OUTPUT"] = True
 
     # Resolve checkpoint path and run dir.
     ckpt = args.pqn_checkpoint
