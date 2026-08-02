@@ -98,6 +98,19 @@ class QNetwork(nn.Module):
         return qs
 
 
+def _backup_value(q_next, config):
+    """Bootstrap value for the TD target: hard max (default), or the soft
+    (entropy-regularised) value tau*logsumexp(Q/tau) when SOFT_TARGET is set.
+
+    The soft fixed point makes softmax(Q/SOFT_TAU) exactly Boltzmann-rational,
+    which policy-only WM extraction (training/policy_wm.py) relies on.
+    """
+    if config.get("SOFT_TARGET", False):
+        tau = config["SOFT_TAU"]
+        return tau * jax.nn.logsumexp(q_next / tau, axis=-1)
+    return jnp.max(q_next, axis=-1)
+
+
 def make_train(config, basic_env, env_params, all_goals, checkpoint_dir=None):
     """Build a JIT-able PQN training fn for a goal-conditioned continuous env.
 
@@ -651,7 +664,7 @@ def make_train(config, basic_env, env_params, all_goals, checkpoint_dir=None):
                             )
                             q_vals, q_next = jnp.split(all_q_vals, 2)
                             q_next = jax.lax.stop_gradient(q_next)
-                            q_next = jnp.max(q_next, axis=-1)
+                            q_next = _backup_value(q_next, config)
                             target = mb_reward + (1 - mb_done_goal) * gamma * q_next
                             chosen_action_qvals = jnp.take_along_axis(
                                 q_vals,
@@ -779,7 +792,7 @@ def make_train(config, basic_env, env_params, all_goals, checkpoint_dir=None):
                             )
                             q_vals, q_next = jnp.split(all_q_vals, 2)
                             q_next = jax.lax.stop_gradient(q_next)
-                            q_next = jnp.max(q_next, axis=-1)
+                            q_next = _backup_value(q_next, config)
                             target = (
                                 minibatch.reward
                                 + (1 - minibatch.done_goal) * gamma * q_next

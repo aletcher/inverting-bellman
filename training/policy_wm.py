@@ -46,8 +46,10 @@ def make_value_network(piwm_config, pqn_config):
     """Goal-conditioned scalar value net V_psi(s, g).
 
     Reuses QNetwork with action_dim=1 so obs/goal dim-slicing and LayerNorm
-    match the agent's conditioning. Sigmoid off by default: the soft value
-    tau*logsumexp(Q/tau) can exceed PQN's sigmoid range (0, 1) by tau*log|A|.
+    match the agent's conditioning. The output bound (V_SIGMOID_OUTPUT /
+    V_SIGMOID_SCALE) is applied in apply_value, not inside the network, so the
+    bound can exceed 1 (soft values overshoot max Q by up to tau*log|A| plus
+    accumulated entropy bonuses).
     """
     return QNetwork(
         action_dim=1,
@@ -55,10 +57,19 @@ def make_value_network(piwm_config, pqn_config):
         dense_hidden_size=piwm_config["V_DENSE_HIDDEN_SIZE"],
         dense_layers=piwm_config["V_DENSE_LAYERS"],
         norm_type=pqn_config["NORM_TYPE"],
-        sigmoid_output=piwm_config.get("V_SIGMOID_OUTPUT", False),
+        sigmoid_output=False,
         goal_input_dims=tuple(pqn_config["GOAL_INPUT_DIMS"]) if pqn_config.get("GOAL_INPUT_DIMS") else None,
         obs_input_dims=tuple(pqn_config["OBS_INPUT_DIMS"]) if pqn_config.get("OBS_INPUT_DIMS") else None,
     )
+
+
+def apply_value(v_model, v_params, obs, goal_repr, piwm_config):
+    """V_psi(s, g), bounded in (0, V_SIGMOID_SCALE) when V_SIGMOID_OUTPUT is
+    set. Bounding kills the runaway-V degeneracy of the joint (V, WM) fit."""
+    v = v_model.apply({"params": v_params}, obs, goal_repr, train=False)[:, 0]
+    if piwm_config.get("V_SIGMOID_OUTPUT", False):
+        v = piwm_config.get("V_SIGMOID_SCALE", 1.0) * jax.nn.sigmoid(v)
+    return v
 
 
 def normalised_logpi(q_all, tau, consistency):
@@ -136,7 +147,7 @@ def policy_wm_loss_sampled(
     q_all = network.apply(q_vars, batch_s, goal_repr, train=False)
     logpi_all = normalised_logpi(q_all, tau, consistency)
 
-    v_s = v_model.apply({"params": params["v"]}, batch_s, goal_repr, train=False)[:, 0]
+    v_s = apply_value(v_model, params["v"], batch_s, goal_repr, piwm_config)
     target = tau * logpi_all[jnp.arange(n), batch_a] + v_s
 
     # Semi-gradient option: freeze V_psi in the bootstrap while keeping the
@@ -144,7 +155,7 @@ def policy_wm_loss_sampled(
     v_boot_params = params["v"]
     if piwm_config.get("V_STOP_GRAD", False):
         v_boot_params = jax.tree.map(jax.lax.stop_gradient, params["v"])
-    v_pred = v_model.apply({"params": v_boot_params}, s_pred_obs, goal_repr, train=False)[:, 0]
+    v_pred = apply_value(v_model, v_boot_params, s_pred_obs, goal_repr, piwm_config)
 
     r_pred = compute_reward(s_pred_obs, batch_goal, batch_mask, reward_type, sigma, a_threshold)
     done_pred = jnp.zeros(n)
@@ -345,7 +356,7 @@ def value_diagnostics(
             v_ref = tau * jax.nn.logsumexp(q_all / tau, axis=-1)
         logpi_all = normalised_logpi(q_all, tau, consistency)
 
-        v_psi = v_model.apply({"params": params["v"]}, eval_s, goal_repr, train=False)[:, 0]
+        v_psi = np.array(apply_value(v_model, params["v"], eval_s, goal_repr, piwm_config))
         q_hat = tau * logpi_all + v_psi[:, None]
 
         v_nmse = float(jnp.mean((v_psi - v_ref) ** 2) / jnp.maximum(jnp.var(v_ref), 1e-12))

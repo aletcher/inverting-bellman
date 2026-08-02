@@ -110,6 +110,14 @@ PQN_CONFIG = {
     "EPS_START": EPS_START,
     "EPS_FINISH": EPS_FINISH,
     "EPS_DECAY": EPS_DECAY,
+    # Entropy-regularised (soft) TD target: bootstrap with tau*logsumexp(Q/tau)
+    # instead of max. Makes softmax(Q/SOFT_TAU) Boltzmann-rational by
+    # construction (for policy-only WM extraction). SOFT_TAU must satisfy
+    # tau*log(A)/(1-gamma) << 1 or the agent farms entropy instead of reaching
+    # the goal. Pair with --NETWORK_SIGMOID_OUTPUTS False: soft targets exceed
+    # 1 near goals.
+    "SOFT_TARGET": False,
+    "SOFT_TAU": 0.002,
     "USE_OPTIMISTIC_RESETS": True,
     "OPTIMISTIC_RESET_RATIO": 16,
 

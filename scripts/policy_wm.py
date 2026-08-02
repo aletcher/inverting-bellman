@@ -51,8 +51,13 @@ def main():
     parser.add_argument("--v_stop_grad", action="store_true",
                         help="Semi-gradient bootstrap (freeze V_psi params in target).")
     parser.add_argument("--v_sigmoid", action="store_true",
-                        help="Bound V_psi in (0,1) via sigmoid. Kills the runaway-V "
-                             "degeneracy; exact for hard consistency (V = max Q).")
+                        help="Bound V_psi in (0, v_sigmoid_scale) via sigmoid. Kills "
+                             "the runaway-V degeneracy; exact for hard consistency "
+                             "(V = max Q) when the agent's Q is sigmoid-bounded.")
+    parser.add_argument("--v_sigmoid_scale", type=float, default=None,
+                        help="Upper bound for --v_sigmoid (default 1.0). Use ~1.2 for "
+                             "soft-trained agents whose values exceed 1 via entropy "
+                             "bonuses.")
     parser.add_argument("--wm_loss", type=str, default=None, choices=["l1", "mse"])
     parser.add_argument("--seed", type=int, default=None,
                         help="PiWM training seed (default: PIWM_CONFIG['SEED']).")
@@ -113,6 +118,8 @@ def main():
         piwm_config["V_STOP_GRAD"] = True
     if args.v_sigmoid:
         piwm_config["V_SIGMOID_OUTPUT"] = True
+    if args.v_sigmoid_scale is not None:
+        piwm_config["V_SIGMOID_SCALE"] = args.v_sigmoid_scale
 
     # Resolve checkpoint path and run dir.
     ckpt = args.pqn_checkpoint
@@ -134,6 +141,13 @@ def main():
                 PQN_CONFIG[k] = saved_config[k]
             elif k in PQN_CONFIG and k not in saved_config:
                 del PQN_CONFIG[k]
+        # Soft-trained agent: match the extraction temperature to the agent's
+        # training tau, so softmax(Q/tau) is exactly the agent's Boltzmann
+        # policy (unless --tau overrides explicitly).
+        if saved_config.get("SOFT_TARGET", False) and args.tau is None:
+            piwm_config["TAU"] = saved_config["SOFT_TAU"]
+            print(f"[PiWM] soft-trained agent detected: tau matched to "
+                  f"SOFT_TAU={saved_config['SOFT_TAU']}")
 
     out_dir = args.out_dir
     if out_dir is None:
